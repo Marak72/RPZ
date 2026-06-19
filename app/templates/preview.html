@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Предпросмотр распознанного{% endblock %}
+{% block content %}
+<h3 class="mb-3">Предпросмотр: {{ filename }}</h3>
+<p class="text-muted">Найдено индикаторов: {{ items|length }}.
+  Снимите галочки с лишних записей и сохраните.</p>
+
+<form method="post" action="{{ url_for('main.preview_save') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="filename" value="{{ filename }}">
+  <input type="hidden" name="notes" value="{{ notes }}">
+
+  <div class="mb-2">
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(true)">Выбрать все</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(false)">Снять все</button>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-hover bg-white">
+      <thead class="table-dark">
+        <tr><th></th><th>Значение</th><th>Тип</th><th>Статус</th></tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td>
+            <input type="checkbox" class="form-check-input sel" name="selected" value="{{ it.value }}"
+              {% if not it.already_in_db %}checked{% endif %}>
+          </td>
+          <td>{{ it.value }}</td>
+          <td><span class="badge bg-secondary">{{ it.type }}</span></td>
+          <td>
+            {% if it.already_in_db %}<span class="badge bg-secondary">уже в базе</span>{% endif %}
+            {% if it.in_rpz %}<span class="badge bg-danger">уже в RPZ</span>{% endif %}
+            {% if not it.already_in_db and not it.in_rpz %}<span class="badge bg-success">новый</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-center text-muted">Индикаторы не найдены.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <button type="submit" class="btn btn-primary">Сохранить выбранные</button>
+  <a href="{{ url_for('main.upload') }}" class="btn btn-outline-secondary">Отмена</a>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+function toggleAll(state){ document.querySelectorAll('.sel').forEach(c => c.checked = state); }
+</script>
+{% endblock %}

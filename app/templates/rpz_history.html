@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}История чтений RPZ{% endblock %}
+{% block content %}
+<h3 class="mb-3">История считанных файлов RPZ</h3>
+<div class="table-responsive">
+  <table class="table table-sm table-striped bg-white">
+    <thead class="table-dark">
+      <tr>
+        <th>Дата (UTC)</th>
+        <th>Кем</th>
+        <th>Сервер</th>
+        <th>Записей</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in snapshots %}
+      <tr>
+        <td>{{ s.fetched_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>{{ s.user.username if s.user else '—' }}</td>
+        <td>{{ s.server.host if s.server else '—' }}</td>
+        <td>{{ s.entry_count }}</td>
+        <td><a href="{{ url_for('main.rpz_snapshot_view', snapshot_id=s.id) }}" class="btn btn-sm btn-outline-primary">Открыть</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="text-center text-muted">История пуста.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

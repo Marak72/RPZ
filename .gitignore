@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual env
+venv/
+.venv/
+env/
+
+# Flask instance / SQLite
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Migrations versions are kept; but local env files are not
+.env
+.env.*
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Дашборд — РПЗ ФСТЭК{% endblock %}
+{% block content %}
+<h3 class="mb-4">Обзор блокировок</h3>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3">
+    <div class="card text-bg-primary h-100">
+      <div class="card-body">
+        <div class="display-6">{{ blocked_count }}</div>
+        <div>Доменов заблокировано (в RPZ)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-bg-success h-100">
+      <div class="card-body">
+        <div class="display-6">{{ documents_count }}</div>
+        <div>Обработано писем ФСТЭК</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-bg-secondary h-100">
+      <div class="card-body">
+        <div class="display-6">{{ candidates_total }}</div>
+        <div>Всего кандидатов из писем</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-3">
+    <div class="card text-bg-warning h-100">
+      <div class="card-body">
+        <div class="display-6">{{ pending_count }}</div>
+        <div>Кандидатов ещё не в RPZ</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <h5 class="card-title">Последнее обновление файла RPZ</h5>
+    {% if snapshot %}
+      <p class="mb-1">Считано: <strong>{{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }}</strong> UTC</p>
+      <p class="mb-1">Кем: {{ snapshot.user.username if snapshot.user else '—' }}</p>
+      <p class="mb-1">Сервер: {{ snapshot.server.host if snapshot.server else '—' }}</p>
+      <a href="{{ url_for('main.rpz_view') }}" class="btn btn-outline-primary btn-sm mt-2">Перейти к списку</a>
+    {% else %}
+      <p class="text-muted">Файл RPZ ещё не считывался.
+        {% if current_user.is_operator %}
+          Настройте УЗ в <a href="{{ url_for('main.settings') }}">настройках</a> и обновите список.
+        {% endif %}
+      </p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
