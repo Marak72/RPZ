@@ -1,0 +1,35 @@
+"""Конфигурация приложения.
+
+Все секреты берутся из переменных окружения. Для разработки можно завести
+файл .env (он в .gitignore) и подгружать его вручную перед запуском.
+"""
+import os
+
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+INSTANCE_DIR = os.path.join(BASE_DIR, "instance")
+
+
+class Config:
+    # Ключ для подписи сессий Flask.
+    SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+
+    # SQLite в каталоге instance/.
+    SQLALCHEMY_DATABASE_URI = os.environ.get(
+        "DATABASE_URL", "sqlite:///" + os.path.join(INSTANCE_DIR, "rpz.db")
+    )
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+
+    # Ключ Fernet для шифрования паролей SSH-учётных записей в БД.
+    # Сгенерировать: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    RPZ_FERNET_KEY = os.environ.get("RPZ_FERNET_KEY")
+
+    # Ограничение размера загружаемого письма (10 МБ).
+    MAX_CONTENT_LENGTH = 10 * 1024 * 1024
+
+    # Таймаут SSH-подключения, секунды.
+    SSH_TIMEOUT = int(os.environ.get("SSH_TIMEOUT", "15"))
+
+    # Путь к файлу RPZ-зоны по умолчанию (можно переопределить в настройках УЗ).
+    DEFAULT_ZONE_PATH = os.environ.get(
+        "DEFAULT_ZONE_PATH", "/var/named/master/rpz.block.db"
+    )
