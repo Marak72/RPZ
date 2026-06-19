@@ -1,4 +1,6 @@
 """Основные маршруты: дашборд, просмотр RPZ, парсер писем, настройки."""
+from __future__ import annotations
+
 from functools import wraps
 
 from flask import (
