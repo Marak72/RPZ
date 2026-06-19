@@ -69,7 +69,12 @@ sudo systemctl status fstec          # должно быть active (running)
 curl -s http://127.0.0.1:8000/login | head   # проверка, что gunicorn отвечает
 ```
 
-## 5. Конфигурация nginx
+## 5. Конфигурация веб-сервера
+
+> **Apache (httpd):** используйте `deploy/apache-fstec.conf` — вставьте блоки в
+> существующий `<VirtualHost *:443>`, затем `apachectl configtest && systemctl reload httpd`.
+> Нужны модули mod_proxy, mod_proxy_http, mod_headers, mod_rewrite. Остальные шаги
+> (gunicorn, .env, SELinux) одинаковы. Ниже — вариант для nginx.
 
 Откройте конфиг существующего сайта (обычно
 `/etc/nginx/sites-available/soc-dashboards.72to.ru` или файл в `conf.d/`),
