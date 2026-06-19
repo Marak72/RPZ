@@ -14,6 +14,15 @@ def create_app(config_class: type = Config) -> Flask:
 
     os.makedirs(INSTANCE_DIR, exist_ok=True)
 
+    # За обратным прокси (nginx) на подпути: доверяем X-Forwarded-* заголовкам,
+    # чтобы url_for и редиректы учитывали префикс (X-Forwarded-Prefix) и https.
+    if app.config.get("BEHIND_PROXY"):
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
+        )
+
     db.init_app(app)
     migrate.init_app(app, db)
     csrf.init_app(app)

@@ -1,0 +1,37 @@
+# systemd-юнит для запуска приложения через gunicorn.
+# Скопировать в /etc/systemd/system/fstec.service и поправить пути/пользователя.
+#
+#   sudo cp deploy/fstec.service /etc/systemd/system/fstec.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now fstec
+#   sudo systemctl status fstec
+
+[Unit]
+Description=FSTEC RPZ blocklist web app (gunicorn)
+After=network.target
+
+[Service]
+Type=simple
+# Пользователь, от которого работает приложение (создайте при необходимости).
+User=www-data
+Group=www-data
+
+# Каталог, куда склонирован репозиторий.
+WorkingDirectory=/opt/fstec-rpz
+
+# Секреты и параметры окружения (см. deploy/env.example).
+EnvironmentFile=/opt/fstec-rpz/.env
+
+# gunicorn из виртуального окружения проекта.
+ExecStart=/opt/fstec-rpz/venv/bin/gunicorn \
+    --workers 3 \
+    --bind 127.0.0.1:8000 \
+    --access-logfile - \
+    --error-logfile - \
+    wsgi:application
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

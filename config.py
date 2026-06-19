@@ -33,3 +33,13 @@ class Config:
     DEFAULT_ZONE_PATH = os.environ.get(
         "DEFAULT_ZONE_PATH", "/var/named/master/rpz.block.db"
     )
+
+    # Работа за обратным прокси (nginx) на подпути, напр. /fstec.
+    # При включении приложение доверяет заголовкам X-Forwarded-* (в т.ч.
+    # X-Forwarded-Prefix) и помечает cookie сессии как Secure (только https).
+    BEHIND_PROXY = os.environ.get("BEHIND_PROXY", "").lower() in ("1", "true", "yes")
+
+    # Параметры безопасности cookie сессии.
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    SESSION_COOKIE_SECURE = BEHIND_PROXY
