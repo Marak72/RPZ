@@ -149,3 +149,26 @@ class BlockEntry(db.Model):
 
     def __repr__(self) -> str:
         return f"<BlockEntry {self.value} ({self.status})>"
+
+
+class IocHash(db.Model):
+    """Хеш-индикатор компрометации (sha256/sha1/md5) из письма ФСТЭК.
+
+    Хеши не блокируются в RPZ — это IoC для систем мониторинга (SIEM),
+    поэтому хранятся отдельно от BlockEntry.
+    """
+
+    __tablename__ = "ioc_hashes"
+
+    id = db.Column(db.Integer, primary_key=True)
+    value = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    hash_type = db.Column(db.String(10), nullable=False)  # sha256 / sha1 / md5
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    added_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    notes = db.Column(db.String(500), default="")
+
+    document = db.relationship("Document")
+
+    def __repr__(self) -> str:
+        return f"<IocHash {self.hash_type}:{self.value[:12]}…>"

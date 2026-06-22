@@ -64,6 +64,21 @@ def _register_cli(app: Flask) -> None:
         db.session.commit()
         click.echo(f"Пользователь '{username}' создан с ролью '{role}'.")
 
+    @app.cli.command("set-password")
+    @click.argument("username")
+    @click.password_option()
+    def set_password(username: str, password: str) -> None:
+        """Сменить пароль существующего пользователя."""
+        from .models import User
+
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            click.echo(f"Пользователь '{username}' не найден.")
+            return
+        user.set_password(password)
+        db.session.commit()
+        click.echo(f"Пароль пользователя '{username}' обновлён.")
+
     @app.cli.command("init-db")
     def init_db() -> None:
         """Создать таблицы БД (для быстрого старта без миграций)."""
