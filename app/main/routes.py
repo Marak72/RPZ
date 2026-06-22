@@ -21,10 +21,14 @@ from ..models import (
     STATUS_NEW,
     BlockEntry,
     Document,
+    IocHash,
     RpzEntry,
     RpzSnapshot,
     SshServer,
 )
+
+# Типы записей, которые являются хешами (а не адресами для блокировки).
+HASH_TYPES = ("sha256", "sha1", "md5")
 from ..services import doc_parser, rpz_parser
 from ..services.ssh_client import SshError, read_remote_file, test_connection
 from .forms import SshServerForm, UploadForm
@@ -67,6 +71,7 @@ def dashboard():
     documents_count = Document.query.count()
     candidates_total = BlockEntry.query.count()
     pending_count = BlockEntry.query.filter_by(status=STATUS_NEW).count()
+    hashes_count = IocHash.query.count()
     return render_template(
         "dashboard.html",
         snapshot=snap,
@@ -74,6 +79,7 @@ def dashboard():
         documents_count=documents_count,
         candidates_total=candidates_total,
         pending_count=pending_count,
+        hashes_count=hashes_count,
     )
 
 
@@ -204,20 +210,31 @@ def upload():
             return redirect(url_for("main.upload"))
 
         existing = {b.value for b in BlockEntry.query.all()}
+        existing_hashes = {h.value for h in IocHash.query.all()}
         blocked = _latest_blocked_domains()
-        items = []
+        items, hash_items = [], []
         for e in extracted:
-            items.append(
-                {
-                    "value": e.value,
-                    "type": e.entry_type,
-                    "already_in_db": e.value in existing,
-                    "in_rpz": e.value in blocked,
-                }
-            )
+            if e.entry_type in HASH_TYPES:
+                hash_items.append(
+                    {
+                        "value": e.value,
+                        "type": e.entry_type,
+                        "already_in_db": e.value in existing_hashes,
+                    }
+                )
+            else:
+                items.append(
+                    {
+                        "value": e.value,
+                        "type": e.entry_type,
+                        "already_in_db": e.value in existing,
+                        "in_rpz": e.value in blocked,
+                    }
+                )
         return render_template(
             "preview.html",
             items=items,
+            hash_items=hash_items,
             filename=file.filename,
             notes=form.notes.data or "",
         )
@@ -228,20 +245,21 @@ def upload():
 @operator_required
 def preview_save():
     selected = request.form.getlist("selected")
+    selected_hashes = request.form.getlist("selected_hash")
     filename = request.form.get("filename", "письмо")
     notes = request.form.get("notes", "")
-    if not selected:
+    if not selected and not selected_hashes:
         flash("Не выбрано ни одной записи для сохранения.", "warning")
         return redirect(url_for("main.upload"))
 
     blocked = _latest_blocked_domains()
     existing = {b.value for b in BlockEntry.query.all()}
+    existing_hashes = {h.value for h in IocHash.query.all()}
 
     doc = Document(
         filename=filename,
         uploaded_by=current_user.id,
         notes=notes,
-        entries_found=len(selected),
     )
     db.session.add(doc)
     db.session.flush()
@@ -265,10 +283,37 @@ def preview_save():
         existing.add(value)
         added += 1
 
-    doc.entries_found = added
+    hashes_added = 0
+    for value in selected_hashes:
+        value = value.strip().lower()
+        if not value or value in existing_hashes:
+            continue
+        hash_type = _hash_type_of(value)
+        db.session.add(
+            IocHash(
+                value=value,
+                hash_type=hash_type,
+                document_id=doc.id,
+                added_by=current_user.id,
+            )
+        )
+        existing_hashes.add(value)
+        hashes_added += 1
+
+    doc.entries_found = added + hashes_added
     db.session.commit()
-    flash(f"Сохранено новых записей: {added}.", "success")
+    flash(
+        f"Сохранено: адресов — {added}, хешей — {hashes_added}.", "success"
+    )
+    if added and not hashes_added:
+        return redirect(url_for("main.candidates"))
+    if hashes_added and not added:
+        return redirect(url_for("main.iocs"))
     return redirect(url_for("main.candidates"))
+
+
+def _hash_type_of(value: str) -> str:
+    return {64: "sha256", 40: "sha1", 32: "md5"}.get(len(value), "sha256")
 
 
 @main_bp.route("/candidates")
@@ -283,6 +328,20 @@ def candidates():
         query = query.filter_by(status=status)
     items = query.order_by(BlockEntry.created_at.desc()).all()
     return render_template("candidates.html", items=items, q=q, status=status)
+
+
+@main_bp.route("/iocs")
+@login_required
+def iocs():
+    q = request.args.get("q", "").strip().lower()
+    htype = request.args.get("type", "").strip()
+    query = IocHash.query
+    if q:
+        query = query.filter(IocHash.value.like(f"%{q}%"))
+    if htype:
+        query = query.filter_by(hash_type=htype)
+    items = query.order_by(IocHash.created_at.desc()).all()
+    return render_template("iocs.html", items=items, q=q, htype=htype)
 
 
 # --- Настройки SSH (УЗ) ---------------------------------------------------

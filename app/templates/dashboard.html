@@ -3,8 +3,8 @@
 {% block content %}
 <h3 class="mb-4">Обзор блокировок</h3>
 
-<div class="row g-3 mb-4">
-  <div class="col-md-3">
+<div class="row row-cols-2 row-cols-md-5 g-3 mb-4">
+  <div class="col">
     <div class="card text-bg-primary h-100">
       <div class="card-body">
         <div class="display-6">{{ blocked_count }}</div>
@@ -12,7 +12,7 @@
       </div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col">
     <div class="card text-bg-success h-100">
       <div class="card-body">
         <div class="display-6">{{ documents_count }}</div>
@@ -20,7 +20,7 @@
       </div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col">
     <div class="card text-bg-secondary h-100">
       <div class="card-body">
         <div class="display-6">{{ candidates_total }}</div>
@@ -28,11 +28,19 @@
       </div>
     </div>
   </div>
-  <div class="col-md-3">
+  <div class="col">
     <div class="card text-bg-warning h-100">
       <div class="card-body">
         <div class="display-6">{{ pending_count }}</div>
         <div>Кандидатов ещё не в RPZ</div>
+      </div>
+    </div>
+  </div>
+  <div class="col">
+    <div class="card text-bg-info h-100">
+      <div class="card-body">
+        <div class="display-6">{{ hashes_count }}</div>
+        <div>Хешей (IoC) сохранено</div>
       </div>
     </div>
   </div>

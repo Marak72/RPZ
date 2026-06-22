@@ -19,6 +19,7 @@
         <li class="nav-item"><a class="nav-link" href="{{ url_for('main.dashboard') }}">Дашборд</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('main.rpz_view') }}">Заблокировано</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('main.candidates') }}">Кандидаты</a></li>
+        <li class="nav-item"><a class="nav-link" href="{{ url_for('main.iocs') }}">Хеши (IoC)</a></li>
         {% if current_user.is_operator %}
         <li class="nav-item"><a class="nav-link" href="{{ url_for('main.upload') }}">Загрузить письмо</a></li>
         <li class="nav-item"><a class="nav-link" href="{{ url_for('main.settings') }}">Настройки</a></li>
