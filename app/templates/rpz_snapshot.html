@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Снимок RPZ #{{ snapshot.id }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Снимок RPZ от {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC</h3>
+  <a href="{{ url_for('main.rpz_history') }}" class="btn btn-sm btn-outline-secondary">← К истории</a>
+</div>
+<p class="text-muted">
+  Кем: {{ snapshot.user.username if snapshot.user else '—' }} ·
+  Сервер: {{ snapshot.server.host if snapshot.server else '—' }} ·
+  Записей: {{ snapshot.entry_count }}
+</p>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tbl">Таблица</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#raw">Исходный файл</button></li>
+</ul>
+<div class="tab-content">
+  <div class="tab-pane fade show active" id="tbl">
+    <div class="table-responsive">
+      <table class="table table-sm table-striped bg-white">
+        <thead class="table-dark"><tr><th>Домен</th><th>Тип</th><th>Действие</th><th>Цель</th></tr></thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r.domain }}</td>
+            <td>{{ r.record_type }}</td>
+            <td>{% if r.action=='block' %}<span class="badge bg-danger">Блокировка</span>{% else %}<span class="badge bg-warning text-dark">Перенаправление</span>{% endif %}</td>
+            <td><code>{{ r.target }}</code></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="tab-pane fade" id="raw">
+    <pre class="bg-white p-3 border rounded" style="max-height:500px;overflow:auto">{{ snapshot.raw_content }}</pre>
+  </div>
+</div>
+{% endblock %}

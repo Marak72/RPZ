@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Заблокированные домены — РПЗ ФСТЭК{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Заблокированные домены (RPZ)</h3>
+  <div>
+    <a href="{{ url_for('main.rpz_history') }}" class="btn btn-outline-secondary btn-sm">История</a>
+    {% if current_user.is_operator %}
+    <form method="post" action="{{ url_for('main.rpz_refresh') }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-primary btn-sm">🔄 Обновить с сервера (SSH)</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if snapshot %}
+  <p class="text-muted">
+    Последнее чтение: {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC
+    {% if snapshot.user %} · {{ snapshot.user.username }}{% endif %}
+    {% if snapshot.server %} · {{ snapshot.server.host }}{% endif %}
+    · записей: {{ snapshot.entry_count }}
+  </p>
+{% else %}
+  <div class="alert alert-info">Файл RPZ ещё не считывался.
+    {% if current_user.is_operator %}Нажмите «Обновить с сервера».{% endif %}
+  </div>
+{% endif %}
+
+<form method="get" class="row g-2 mb-3">
+  <div class="col-auto">
+    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Поиск по домену">
+  </div>
+  <div class="col-auto">
+    <select name="action" class="form-select form-select-sm">
+      <option value="">Все действия</option>
+      <option value="block" {% if action=='block' %}selected{% endif %}>Блокировка</option>
+      <option value="redirect" {% if action=='redirect' %}selected{% endif %}>Перенаправление</option>
+    </select>
+  </div>
+  <div class="col-auto">
+    <button class="btn btn-sm btn-outline-secondary">Применить</button>
+  </div>
+</form>
+
+<div class="table-responsive">
+  <table class="table table-sm table-striped table-hover bg-white">
+    <thead class="table-dark">
+      <tr>
+        <th>Домен</th>
+        <th>Тип</th>
+        <th>Действие</th>
+        <th>Цель</th>
+        <th>Wildcard</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.domain }}</td>
+        <td><span class="badge bg-secondary">{{ r.record_type }}</span></td>
+        <td>
+          {% if r.action == 'block' %}
+            <span class="badge bg-danger">Блокировка</span>
+          {% else %}
+            <span class="badge bg-warning text-dark">Перенаправление</span>
+          {% endif %}
+        </td>
+        <td><code>{{ r.target }}</code></td>
+        <td>{% if r.has_wildcard %}<span class="badge bg-info text-dark">*.домен</span>{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="text-center text-muted">Записей нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="text-muted">Показано доменов: {{ rows|length }}</p>
+{% endblock %}

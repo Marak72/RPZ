@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Кандидаты из писем ФСТЭК{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Кандидаты на блокировку</h3>
+  {% if current_user.is_operator %}
+  <form method="post" action="{{ url_for('main.push') }}" class="d-inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-outline-primary btn-sm" title="Будет реализовано позже">⬆️ Выгрузить на сервер</button>
+  </form>
+  {% endif %}
+</div>
+
+<form method="get" class="row g-2 mb-3">
+  <div class="col-auto">
+    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Поиск">
+  </div>
+  <div class="col-auto">
+    <select name="status" class="form-select form-select-sm">
+      <option value="">Все статусы</option>
+      <option value="new" {% if status=='new' %}selected{% endif %}>Новый</option>
+      <option value="in_rpz" {% if status=='in_rpz' %}selected{% endif %}>Уже в RPZ</option>
+      <option value="pushed" {% if status=='pushed' %}selected{% endif %}>Выгружен</option>
+    </select>
+  </div>
+  <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">Применить</button></div>
+</form>
+
+<div class="table-responsive">
+  <table class="table table-sm table-striped bg-white">
+    <thead class="table-dark">
+      <tr><th>Значение</th><th>Тип</th><th>Статус</th><th>Источник</th><th>Добавлен (UTC)</th></tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td>{{ it.value }}</td>
+        <td><span class="badge bg-secondary">{{ it.entry_type }}</span></td>
+        <td>
+          {% if it.status=='new' %}<span class="badge bg-warning text-dark">новый</span>
+          {% elif it.status=='in_rpz' %}<span class="badge bg-danger">в RPZ</span>
+          {% else %}<span class="badge bg-success">выгружен</span>{% endif %}
+        </td>
+        <td>{{ it.document.filename if it.document else '—' }}</td>
+        <td>{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="text-center text-muted">Кандидатов нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="text-muted">Всего: {{ items|length }}</p>
+{% endblock %}
