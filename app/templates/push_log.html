@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Выгрузка #{{ log.id }}{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Выгрузка #{{ log.id }}</h3>
+  <a href="{{ url_for('main.push_history') }}" class="btn btn-sm btn-outline-secondary">← К журналу</a>
+</div>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <div class="row">
+      <div class="col-md-6">
+        <p class="mb-1">Статус:
+          {% if log.status=='success' %}<span class="badge bg-success">успешно</span>
+          {% elif log.status=='dry_run' %}<span class="badge bg-info text-dark">предпросмотр</span>
+          {% elif log.status=='rolled_back' %}<span class="badge bg-warning text-dark">откат выполнен</span>
+          {% else %}<span class="badge bg-danger">ошибка</span>{% endif %}
+        </p>
+        <p class="mb-1">Начало: {{ log.started_at.strftime('%d.%m.%Y %H:%M:%S') }} UTC</p>
+        <p class="mb-1">Завершено: {{ log.finished_at.strftime('%d.%m.%Y %H:%M:%S') if log.finished_at else '—' }}</p>
+        <p class="mb-1">Кем: {{ log.user.username if log.user else '—' }}</p>
+      </div>
+      <div class="col-md-6">
+        <p class="mb-1">Сервер: {{ log.server.host if log.server else '—' }}</p>
+        <p class="mb-1">Доменов: <strong>{{ log.entries_count }}</strong></p>
+        <p class="mb-1">Serial: {{ log.old_serial or '—' }} → {{ log.new_serial or '—' }}</p>
+        <p class="mb-1">Резервная копия: <code>{{ log.backup_path or '—' }}</code></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if log.domains %}
+<div class="card mb-3">
+  <div class="card-body">
+    <h6 class="card-title">Домены</h6>
+    <div style="max-height:220px;overflow:auto"><code style="white-space:pre-wrap">{{ log.domains }}</code></div>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-body">
+    <h6 class="card-title">Журнал шагов</h6>
+    <pre class="bg-light p-3 border rounded mb-0" style="max-height:400px;overflow:auto;white-space:pre-wrap">{{ log.message }}</pre>
+  </div>
+</div>
+{% endblock %}

@@ -4,7 +4,9 @@
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h3 class="mb-0">Заблокированные домены (RPZ)</h3>
   <div>
+    <a href="{{ url_for('main.rpz_csv') }}" class="btn btn-outline-secondary btn-sm">⬇ CSV</a>
     <a href="{{ url_for('main.rpz_history') }}" class="btn btn-outline-secondary btn-sm">История</a>
+    <a href="{{ url_for('main.push_view') }}" class="btn btn-outline-primary btn-sm">⬆️ Выгрузка</a>
     {% if current_user.is_operator %}
     <form method="post" action="{{ url_for('main.rpz_refresh') }}" class="d-inline">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

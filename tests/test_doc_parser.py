@@ -1,26 +1,12 @@
+from pathlib import Path
+
 from app.services import doc_parser
 
-# Фрагмент в стиле реального письма ФСТЭК: индикаторы на отдельных строках,
-# имена файлов/ПО/ссылки-источники — внутри предложений.
-LETTER = """Информирую.
-Во вложениях прикреплен архив «Contract.bz», содержащий «Contract.exe».
-для антивирусного средства Dr.Web Security Space необходимо использовать.
-ограничение обращений к следующим адресам:
-5[.]252[.]153[.]67;
-arp-database[.]com;
-hxxps[:]//github[.]com/yulyaigonina/.
-hxxp[:]//voffice[.]help/driver[.]jpg;
-обеспечить ограничение обращений к IP-адресу 31[.]56[.]209[.]126, используя.
-ограничение обращений к адресу crystalxrat[.]net, используя.
-ограничить получение писем с адреса info@roskomnadsor[.]ru.
-Методики (https://fstec.ru/dokumenty/vse-dokumenty).
-индикаторы компрометации (sha256):
-f833236b43cfa6d69b6ceadae649c5c970e6e1b32fd3d3d0e5ccc4faa433e68f;
-(md5):
-2F150ACC59944EDB992FCCCC5E405349;
-(sha1):
-98D909338F8F49A340BF7A3302B32BE8F32F69A9.
-"""
+# Фикстура составлена по реальному письму ФСТЭК: индикаторы на отдельных
+# строках, имена вложений/названия ПО/ссылки-источники — внутри предложений.
+LETTER = (Path(__file__).parent / "fixtures" / "fstec_letter_sample.txt").read_text(
+    encoding="utf-8"
+)
 
 
 def _vals(res, t):
@@ -52,6 +38,33 @@ def test_url_host_only_no_path_fragments():
     assert "voffice.help" in domains
     # путь из URL не должен попасть как домен
     assert "driver.jpg" not in domains
+
+
+def test_urls_with_paths_are_separate_category():
+    res = doc_parser.extract(LETTER)
+    urls = _vals(res, "url")
+    assert "http://voffice.help/driver.jpg" in urls
+    assert "https://telegram.me/hgo9tx" in urls
+    # у URL сохраняется хост
+    entry = next(e for e in res if e.value == "http://voffice.help/driver.jpg")
+    assert entry.host == "voffice.help"
+
+
+def test_url_without_path_is_domain_only():
+    res = doc_parser.extract("hxxps[:]//lorebird[.]com;\n")
+    assert _vals(res, "url") == set()
+    assert "lorebird.com" in _vals(res, "domain")
+
+
+def test_is_valid_domain_rejects_file_names():
+    assert doc_parser.is_valid_domain("evil.com") is True
+    assert doc_parser.is_valid_domain("contract.exe") is False
+    assert doc_parser.is_valid_domain("report.docx") is False
+    assert doc_parser.is_valid_domain("a.b") is False  # TLD из одного символа
+    assert doc_parser.is_valid_domain("-bad.com") is False
+    assert doc_parser.is_valid_domain("bad-.com") is False
+    assert doc_parser.is_valid_domain("1.2.3.4") is False
+    assert doc_parser.is_valid_domain("xn--80affa3aj0al.xn--80asehdb") is True
 
 
 def test_inline_indicators_after_address_word():

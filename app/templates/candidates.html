@@ -3,24 +3,41 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <h3 class="mb-0">Кандидаты на блокировку</h3>
-  {% if current_user.is_operator %}
-  <form method="post" action="{{ url_for('main.push') }}" class="d-inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="btn btn-outline-primary btn-sm" title="Будет реализовано позже">⬆️ Выгрузить на сервер</button>
-  </form>
-  {% endif %}
+  <div>
+    <a href="{{ url_for('main.candidates_csv', **request.args) }}" class="btn btn-sm btn-outline-secondary">⬇ CSV</a>
+    <a href="{{ url_for('main.push_view') }}" class="btn btn-sm btn-primary">⬆️ К выгрузке</a>
+  </div>
 </div>
 
+<ul class="nav nav-pills mb-3">
+  <li class="nav-item">
+    <a class="nav-link {% if not etype %}active{% endif %}" href="{{ url_for('main.candidates') }}">
+      Все <span class="badge bg-light text-dark">{{ counts.all }}</span></a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if etype=='domain' %}active{% endif %}" href="{{ url_for('main.candidates', type='domain') }}">
+      Домены <span class="badge bg-light text-dark">{{ counts.domain }}</span></a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if etype=='ip' %}active{% endif %}" href="{{ url_for('main.candidates', type='ip') }}">
+      IP-адреса <span class="badge bg-light text-dark">{{ counts.ip }}</span></a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="{{ url_for('main.urls') }}">URL с путями →</a>
+  </li>
+</ul>
+
 <form method="get" class="row g-2 mb-3">
+  {% if etype %}<input type="hidden" name="type" value="{{ etype }}">{% endif %}
   <div class="col-auto">
     <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Поиск">
   </div>
   <div class="col-auto">
     <select name="status" class="form-select form-select-sm">
       <option value="">Все статусы</option>
-      <option value="new" {% if status=='new' %}selected{% endif %}>Новый</option>
+      <option value="new" {% if status=='new' %}selected{% endif %}>Новый (не в RPZ)</option>
       <option value="in_rpz" {% if status=='in_rpz' %}selected{% endif %}>Уже в RPZ</option>
-      <option value="pushed" {% if status=='pushed' %}selected{% endif %}>Выгружен</option>
+      <option value="pushed" {% if status=='pushed' %}selected{% endif %}>Выгружен нами</option>
     </select>
   </div>
   <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">Применить</button></div>
@@ -29,26 +46,31 @@
 <div class="table-responsive">
   <table class="table table-sm table-striped bg-white">
     <thead class="table-dark">
-      <tr><th>Значение</th><th>Тип</th><th>Статус</th><th>Источник</th><th>Добавлен (UTC)</th></tr>
+      <tr><th>Значение</th><th>Тип</th><th>Статус</th><th>Источник</th>
+          <th>Добавлен (UTC)</th><th>Выгружен</th></tr>
     </thead>
     <tbody>
       {% for it in items %}
       <tr>
         <td>{{ it.value }}</td>
-        <td><span class="badge bg-secondary">{{ it.entry_type }}</span></td>
+        <td>
+          {% if it.entry_type=='ip' %}<span class="badge bg-dark">IP</span>
+          {% else %}<span class="badge bg-secondary">домен</span>{% endif %}
+        </td>
         <td>
           {% if it.status=='new' %}<span class="badge bg-warning text-dark">новый</span>
-          {% elif it.status=='in_rpz' %}<span class="badge bg-danger">в RPZ</span>
+          {% elif it.status=='in_rpz' %}<span class="badge bg-secondary">в RPZ</span>
           {% else %}<span class="badge bg-success">выгружен</span>{% endif %}
         </td>
-        <td>{{ it.document.filename if it.document else '—' }}</td>
-        <td>{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td class="text-muted">{{ it.document.filename if it.document else '—' }}</td>
+        <td class="text-muted">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td class="text-muted">{{ it.pushed_at.strftime('%d.%m.%Y %H:%M') if it.pushed_at else '—' }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="5" class="text-center text-muted">Кандидатов нет.</td></tr>
+      <tr><td colspan="6" class="text-center text-muted">Записей нет.</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </div>
-<p class="text-muted">Всего: {{ items|length }}</p>
+{% include "_pagination.html" %}
 {% endblock %}

@@ -11,9 +11,15 @@ ROLE_OPERATOR = "operator"  # полный доступ: загрузка, SSH-�
 ROLE_MANAGER = "manager"    # только просмотр
 
 # Статусы кандидатов из писем ФСТЭК.
-STATUS_NEW = "new"        # распознан, ещё не сверён/не на сервере
-STATUS_IN_RPZ = "in_rpz"  # уже присутствует в считанном файле RPZ
-STATUS_PUSHED = "pushed"  # выгружен на сервер (финальная фаза)
+STATUS_NEW = "new"        # распознан, ещё не выгружен на сервер
+STATUS_IN_RPZ = "in_rpz"  # присутствует в считанном файле RPZ
+STATUS_PUSHED = "pushed"  # выгружен на сервер этим приложением
+
+# Результаты выгрузки в BIND.
+PUSH_SUCCESS = "success"
+PUSH_FAILED = "failed"
+PUSH_DRY_RUN = "dry_run"
+PUSH_ROLLED_BACK = "rolled_back"
 
 
 @login_manager.user_loader
@@ -61,6 +67,14 @@ class SshServer(db.Model):
     zone_file_path = db.Column(
         db.String(500), nullable=False, default="/var/named/master/rpz.block.db"
     )
+    # Имя зоны для named-checkzone и `rndc reload <zone>`.
+    zone_name = db.Column(db.String(255), nullable=False, default="rpz.block")
+    # Выполнять команды на сервере через sudo -n (если УЗ не root).
+    use_sudo = db.Column(db.Boolean, nullable=False, default=False)
+    # Проверять зону через named-checkzone перед установкой (настоятельно да).
+    validate_zone = db.Column(db.Boolean, nullable=False, default=True)
+    # Перезагружать зону через rndc reload после установки.
+    reload_zone = db.Column(db.Boolean, nullable=False, default=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     updated_at = db.Column(
         db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -146,9 +160,65 @@ class BlockEntry(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     added_by = db.Column(db.Integer, db.ForeignKey("users.id"))
     notes = db.Column(db.String(500), default="")
+    # Когда запись была выгружена в RPZ-зону этим приложением.
+    pushed_at = db.Column(db.DateTime)
+
+    @property
+    def is_pushable(self) -> bool:
+        """В RPZ можно выгружать только домены (IP блокируются на межсетевом экране)."""
+        return self.entry_type == "domain"
 
     def __repr__(self) -> str:
         return f"<BlockEntry {self.value} ({self.status})>"
+
+
+class UrlEntry(db.Model):
+    """Ссылка С ПУТЁМ из письма ФСТЭК.
+
+    RPZ работает на уровне DNS-имён и не умеет блокировать конкретные пути,
+    поэтому такие индикаторы хранятся отдельно — их блокируют на прокси/WAF.
+    Хост из такой ссылки при этом попадает в BlockEntry как обычный домен.
+    """
+
+    __tablename__ = "url_entries"
+
+    id = db.Column(db.Integer, primary_key=True)
+    value = db.Column(db.String(2000), unique=True, nullable=False)
+    host = db.Column(db.String(500), nullable=False, index=True)
+    document_id = db.Column(db.Integer, db.ForeignKey("documents.id"))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    added_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    notes = db.Column(db.String(500), default="")
+
+    document = db.relationship("Document")
+
+    def __repr__(self) -> str:
+        return f"<UrlEntry {self.value[:60]}…>"
+
+
+class PushLog(db.Model):
+    """Журнал выгрузок в RPZ-зону на боевом DNS-сервере."""
+
+    __tablename__ = "push_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    server_id = db.Column(db.Integer, db.ForeignKey("ssh_servers.id"))
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    finished_at = db.Column(db.DateTime)
+    status = db.Column(db.String(20), nullable=False)  # success/failed/dry_run/rolled_back
+    entries_count = db.Column(db.Integer, nullable=False, default=0)
+    domains = db.Column(db.Text, default="")       # список выгруженных доменов
+    backup_path = db.Column(db.String(500), default="")
+    old_serial = db.Column(db.String(32), default="")
+    new_serial = db.Column(db.String(32), default="")
+    message = db.Column(db.Text, default="")       # подробный лог шагов
+
+    server = db.relationship("SshServer")
+    user = db.relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<PushLog {self.id} {self.status} ({self.entries_count})>"
 
 
 class IocHash(db.Model):

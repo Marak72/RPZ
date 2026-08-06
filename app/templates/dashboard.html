@@ -1,66 +1,106 @@
 {% extends "base.html" %}
 {% block title %}Дашборд — РПЗ ФСТЭК{% endblock %}
 {% block content %}
-<h3 class="mb-4">Обзор блокировок</h3>
-
-<div class="row row-cols-2 row-cols-md-5 g-3 mb-4">
-  <div class="col">
-    <div class="card text-bg-primary h-100">
-      <div class="card-body">
-        <div class="display-6">{{ blocked_count }}</div>
-        <div>Доменов заблокировано (в RPZ)</div>
-      </div>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card text-bg-success h-100">
-      <div class="card-body">
-        <div class="display-6">{{ documents_count }}</div>
-        <div>Обработано писем ФСТЭК</div>
-      </div>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card text-bg-secondary h-100">
-      <div class="card-body">
-        <div class="display-6">{{ candidates_total }}</div>
-        <div>Всего кандидатов из писем</div>
-      </div>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card text-bg-warning h-100">
-      <div class="card-body">
-        <div class="display-6">{{ pending_count }}</div>
-        <div>Кандидатов ещё не в RPZ</div>
-      </div>
-    </div>
-  </div>
-  <div class="col">
-    <div class="card text-bg-info h-100">
-      <div class="card-body">
-        <div class="display-6">{{ hashes_count }}</div>
-        <div>Хешей (IoC) сохранено</div>
-      </div>
-    </div>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Обзор блокировок</h3>
+  <div>
+    <a href="{{ url_for('main.rpz_csv') }}" class="btn btn-sm btn-outline-secondary">⬇ CSV: заблокировано</a>
+    {% if current_user.is_operator %}
+    <form method="post" action="{{ url_for('main.rpz_refresh') }}" class="d-inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-sm btn-primary">🔄 Обновить с сервера</button>
+    </form>
+    {% endif %}
   </div>
 </div>
 
-<div class="card">
-  <div class="card-body">
-    <h5 class="card-title">Последнее обновление файла RPZ</h5>
-    {% if snapshot %}
-      <p class="mb-1">Считано: <strong>{{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }}</strong> UTC</p>
-      <p class="mb-1">Кем: {{ snapshot.user.username if snapshot.user else '—' }}</p>
-      <p class="mb-1">Сервер: {{ snapshot.server.host if snapshot.server else '—' }}</p>
-      <a href="{{ url_for('main.rpz_view') }}" class="btn btn-outline-primary btn-sm mt-2">Перейти к списку</a>
-    {% else %}
-      <p class="text-muted">Файл RPZ ещё не считывался.
-        {% if current_user.is_operator %}
-          Настройте УЗ в <a href="{{ url_for('main.settings') }}">настройках</a> и обновите список.
+<div class="row row-cols-2 row-cols-md-4 row-cols-xl-7 g-3 mb-4">
+  <div class="col"><div class="card stat-card text-bg-primary h-100"><div class="card-body">
+    <div class="display-6">{{ stats.rpz_domains }}</div><div>Доменов в RPZ</div></div></div></div>
+  <div class="col"><div class="card stat-card text-bg-warning h-100"><div class="card-body">
+    <div class="display-6">{{ stats.pending }}</div><div>Ждут выгрузки</div></div></div></div>
+  <div class="col"><div class="card stat-card text-bg-success h-100"><div class="card-body">
+    <div class="display-6">{{ stats.pushed }}</div><div>Выгружено нами</div></div></div></div>
+  <div class="col"><div class="card stat-card text-bg-secondary h-100"><div class="card-body">
+    <div class="display-6">{{ stats.domains }}</div><div>Доменов всего</div></div></div></div>
+  <div class="col"><div class="card stat-card text-bg-dark h-100"><div class="card-body">
+    <div class="display-6">{{ stats.ips }}</div><div>IP-адресов</div></div></div></div>
+  <div class="col"><div class="card stat-card text-bg-info h-100"><div class="card-body">
+    <div class="display-6">{{ stats.urls }}</div><div>URL с путями</div></div></div></div>
+  <div class="col"><div class="card stat-card text-bg-light h-100"><div class="card-body">
+    <div class="display-6">{{ stats.hashes }}</div><div>Хешей (IoC)</div></div></div></div>
+</div>
+
+{% if stats.pending %}
+<div class="alert alert-warning d-flex justify-content-between align-items-center">
+  <span>⚠️ Доменов, которых ещё нет в RPZ-зоне: <strong>{{ stats.pending }}</strong></span>
+  <a href="{{ url_for('main.push_view') }}" class="btn btn-sm btn-warning">Перейти к выгрузке</a>
+</div>
+{% endif %}
+
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h5 class="card-title">Состояние RPZ-зоны</h5>
+        {% if snapshot %}
+          <p class="mb-1">Считано: <strong>{{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }}</strong> UTC</p>
+          <p class="mb-1">Кем: {{ snapshot.user.username if snapshot.user else '—' }}</p>
+          <p class="mb-1">Сервер: {{ snapshot.server.host if snapshot.server else '—' }}</p>
+          <p class="mb-1">Записей в файле: {{ snapshot.entry_count }}</p>
+          <a href="{{ url_for('main.rpz_view') }}" class="btn btn-outline-primary btn-sm mt-2">Список доменов</a>
+        {% else %}
+          <p class="text-muted">Файл RPZ ещё не считывался.
+            {% if current_user.is_operator %}
+              Настройте УЗ в <a href="{{ url_for('main.settings') }}">настройках</a> и нажмите «Обновить».
+            {% endif %}
+          </p>
         {% endif %}
-      </p>
-    {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h5 class="card-title">Последние письма</h5>
+        <ul class="list-unstyled mb-0 small">
+          {% for d in recent_docs %}
+          <li class="mb-2">
+            <div>📄 {{ d.filename }}</div>
+            <div class="text-muted">{{ d.uploaded_at.strftime('%d.%m.%Y %H:%M') }} ·
+              индикаторов: {{ d.entries_found }}{% if d.notes %} · {{ d.notes }}{% endif %}</div>
+          </li>
+          {% else %}
+          <li class="text-muted">Писем пока нет.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h5 class="card-title">Последние выгрузки</h5>
+        <ul class="list-unstyled mb-0 small">
+          {% for p in recent_pushes %}
+          <li class="mb-2">
+            <a href="{{ url_for('main.push_log_view', log_id=p.id) }}">
+              {% if p.status=='success' %}<span class="badge bg-success">успех</span>
+              {% elif p.status=='dry_run' %}<span class="badge bg-info text-dark">предпросмотр</span>
+              {% elif p.status=='rolled_back' %}<span class="badge bg-warning text-dark">откат</span>
+              {% else %}<span class="badge bg-danger">ошибка</span>{% endif %}
+            </a>
+            {{ p.entries_count }} доменов ·
+            <span class="text-muted">{{ p.started_at.strftime('%d.%m.%Y %H:%M') }}</span>
+          </li>
+          {% else %}
+          <li class="text-muted">Выгрузок пока не было.</li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

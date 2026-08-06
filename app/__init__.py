@@ -2,7 +2,7 @@
 import os
 
 import click
-from flask import Flask
+from flask import Flask, render_template
 
 from config import INSTANCE_DIR, Config
 from .extensions import csrf, db, login_manager, migrate
@@ -37,8 +37,53 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
 
+    _register_error_handlers(app)
     _register_cli(app)
     return app
+
+
+def _register_error_handlers(app: Flask) -> None:
+    """Показывать понятные страницы вместо трассировок."""
+
+    @app.errorhandler(403)
+    def forbidden(_error):
+        return render_template(
+            "error.html",
+            code=403,
+            title="Доступ запрещён",
+            message="Этот раздел доступен только операторам. "
+                    "Ваша роль позволяет только просмотр.",
+        ), 403
+
+    @app.errorhandler(404)
+    def not_found(_error):
+        return render_template(
+            "error.html",
+            code=404,
+            title="Страница не найдена",
+            message="Запрошенная страница или запись не существует.",
+        ), 404
+
+    @app.errorhandler(413)
+    def too_large(_error):
+        return render_template(
+            "error.html",
+            code=413,
+            title="Файл слишком большой",
+            message="Размер загружаемого письма не должен превышать 10 МБ.",
+        ), 413
+
+    @app.errorhandler(500)
+    def server_error(error):
+        app.logger.exception("Внутренняя ошибка: %s", error)
+        db.session.rollback()
+        return render_template(
+            "error.html",
+            code=500,
+            title="Внутренняя ошибка",
+            message="Произошла непредвиденная ошибка. "
+                    "Подробности записаны в журнал сервиса (journalctl -u fstec).",
+        ), 500
 
 
 def _register_cli(app: Flask) -> None:

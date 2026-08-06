@@ -37,6 +37,16 @@ class SshServerForm(FlaskForm):
         validators=[DataRequired()],
         default="/var/named/master/rpz.block.db",
     )
+    zone_name = StringField(
+        "Имя зоны (для named-checkzone и rndc reload)",
+        validators=[DataRequired()],
+        default="rpz.block",
+    )
+    use_sudo = BooleanField("Выполнять команды через sudo -n", default=False)
+    validate_zone = BooleanField(
+        "Проверять зону через named-checkzone перед записью", default=True
+    )
+    reload_zone = BooleanField("Перезагружать зону (rndc reload)", default=True)
     is_active = BooleanField("Активная учётная запись", default=True)
     submit = SubmitField("Сохранить")
     test = SubmitField("Проверить подключение")

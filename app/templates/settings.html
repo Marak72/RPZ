@@ -37,6 +37,32 @@
             {{ form.zone_file_path.label(class="form-label") }}
             {{ form.zone_file_path(class="form-control") }}
           </div>
+          <div class="mb-3">
+            {{ form.zone_name.label(class="form-label") }}
+            {{ form.zone_name(class="form-control") }}
+            <div class="form-text">Как зона называется в named.conf — используется для
+              <code>named-checkzone</code> и <code>rndc reload</code>.</div>
+          </div>
+
+          <hr>
+          <h6>Параметры безопасной выгрузки</h6>
+          <div class="form-check mb-2">
+            {{ form.validate_zone(class="form-check-input") }}
+            {{ form.validate_zone.label(class="form-check-label") }}
+            <div class="form-text">Настоятельно рекомендуется оставить включённым.</div>
+          </div>
+          <div class="form-check mb-2">
+            {{ form.reload_zone(class="form-check-input") }}
+            {{ form.reload_zone.label(class="form-check-label") }}
+          </div>
+          <div class="form-check mb-3">
+            {{ form.use_sudo(class="form-check-input") }}
+            {{ form.use_sudo.label(class="form-check-label") }}
+            <div class="form-text">Включите, если УЗ не root. Требуется настроенный
+              <code>sudo</code> без пароля (NOPASSWD) для этой учётной записи.</div>
+          </div>
+          <hr>
+
           <div class="form-check mb-3">
             {{ form.is_active(class="form-check-input") }}
             {{ form.is_active.label(class="form-check-label") }}

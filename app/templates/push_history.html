@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Журнал выгрузок{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Журнал выгрузок в RPZ</h3>
+  <a href="{{ url_for('main.push_view') }}" class="btn btn-sm btn-outline-primary">К выгрузке</a>
+</div>
+<div class="table-responsive">
+  <table class="table table-sm table-striped bg-white">
+    <thead class="table-dark">
+      <tr><th>#</th><th>Дата (UTC)</th><th>Статус</th><th>Доменов</th><th>Serial</th><th>Кем</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for l in logs %}
+      <tr>
+        <td>{{ l.id }}</td>
+        <td>{{ l.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td>
+          {% if l.status=='success' %}<span class="badge bg-success">успешно</span>
+          {% elif l.status=='dry_run' %}<span class="badge bg-info text-dark">предпросмотр</span>
+          {% elif l.status=='rolled_back' %}<span class="badge bg-warning text-dark">откат</span>
+          {% else %}<span class="badge bg-danger">ошибка</span>{% endif %}
+        </td>
+        <td>{{ l.entries_count }}</td>
+        <td class="text-muted">{{ l.old_serial }} → {{ l.new_serial }}</td>
+        <td>{{ l.user.username if l.user else '—' }}</td>
+        <td><a href="{{ url_for('main.push_log_view', log_id=l.id) }}" class="btn btn-sm btn-outline-primary">Открыть</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="text-center text-muted">Выгрузок ещё не было.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

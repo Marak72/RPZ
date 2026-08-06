@@ -1,85 +1,151 @@
 {% extends "base.html" %}
 {% block title %}Предпросмотр распознанного{% endblock %}
 {% block content %}
-<h3 class="mb-3">Предпросмотр: {{ filename }}</h3>
-<p class="text-muted">Адресов для блокировки: {{ items|length }} ·
-  хешей (IoC): {{ hash_items|length }}.
-  Снимите галочки с лишних записей и сохраните.</p>
+<h3 class="mb-1">Предпросмотр: {{ filename }}</h3>
+<p class="text-muted">
+  Найдено индикаторов: <strong>{{ total }}</strong> —
+  домены: {{ groups.domains|length }},
+  IP: {{ groups.ips|length }},
+  URL с путями: {{ groups.urls|length }},
+  хеши: {{ groups.hashes|length }}.
+  Снимите галочки с лишних записей и сохраните.
+</p>
 
 <form method="post" action="{{ url_for('main.preview_save') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="filename" value="{{ filename }}">
   <input type="hidden" name="notes" value="{{ notes }}">
+  {# скрытые поля со ВСЕМИ найденными значениями — для выгрузки CSV #}
+  {% for it in groups.domains %}<input type="hidden" name="all_domain" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.ips %}<input type="hidden" name="all_ip" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.urls %}<input type="hidden" name="all_url" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.hashes %}
+    <input type="hidden" name="all_hash" value="{{ it.value }}">
+    <input type="hidden" name="htype_{{ it.value }}" value="{{ it.type }}">
+  {% endfor %}
 
-  <div class="mb-2">
-    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.sel', true)">Выбрать все</button>
-    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.sel', false)">Снять все</button>
+  <div class="d-flex gap-2 mb-3 flex-wrap">
+    <button type="submit" class="btn btn-primary">💾 Сохранить выбранные</button>
+    <button type="submit" formaction="{{ url_for('main.preview_csv') }}" formnovalidate
+            class="btn btn-outline-success">⬇ Скачать всё в CSV</button>
+    <a href="{{ url_for('main.upload') }}" class="btn btn-outline-secondary">Отмена</a>
   </div>
 
-  <h5>Адреса для блокировки (домены / IP)</h5>
-  <div class="table-responsive">
-    <table class="table table-sm table-hover bg-white">
-      <thead class="table-dark">
-        <tr><th></th><th>Значение</th><th>Тип</th><th>Статус</th></tr>
-      </thead>
-      <tbody>
-        {% for it in items %}
-        <tr>
-          <td>
-            <input type="checkbox" class="form-check-input sel" name="selected" value="{{ it.value }}"
-              {% if not it.already_in_db %}checked{% endif %}>
-          </td>
-          <td>{{ it.value }}</td>
-          <td><span class="badge bg-secondary">{{ it.type }}</span></td>
-          <td>
-            {% if it.already_in_db %}<span class="badge bg-secondary">уже в базе</span>{% endif %}
-            {% if it.in_rpz %}<span class="badge bg-danger">уже в RPZ</span>{% endif %}
-            {% if not it.already_in_db and not it.in_rpz %}<span class="badge bg-success">новый</span>{% endif %}
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="4" class="text-center text-muted">Адреса не найдены.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item"><button class="nav-link active" type="button" data-bs-toggle="tab" data-bs-target="#t-dom">
+      Домены <span class="badge bg-secondary">{{ groups.domains|length }}</span></button></li>
+    <li class="nav-item"><button class="nav-link" type="button" data-bs-toggle="tab" data-bs-target="#t-ip">
+      IP <span class="badge bg-secondary">{{ groups.ips|length }}</span></button></li>
+    <li class="nav-item"><button class="nav-link" type="button" data-bs-toggle="tab" data-bs-target="#t-url">
+      URL с путями <span class="badge bg-secondary">{{ groups.urls|length }}</span></button></li>
+    <li class="nav-item"><button class="nav-link" type="button" data-bs-toggle="tab" data-bs-target="#t-hash">
+      Хеши <span class="badge bg-secondary">{{ groups.hashes|length }}</span></button></li>
+  </ul>
 
-  {% if hash_items %}
-  <div class="d-flex justify-content-between align-items-center mt-4">
-    <h5 class="mb-0">Хеши — индикаторы компрометации (IoC)</h5>
-    <div>
-      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.selh', true)">Выбрать все</button>
-      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.selh', false)">Снять все</button>
+  <div class="tab-content">
+    {# --- Домены --- #}
+    <div class="tab-pane fade show active" id="t-dom">
+      <div class="mb-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.sd', true)">Выбрать все</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.sd', false)">Снять все</button>
+        <span class="text-muted small ms-2">Домены можно выгрузить в RPZ.</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover bg-white">
+          <thead class="table-dark"><tr><th></th><th>Домен</th><th>Статус</th></tr></thead>
+          <tbody>
+            {% for it in groups.domains %}
+            <tr>
+              <td><input type="checkbox" class="form-check-input sd" name="selected" value="{{ it.value }}"
+                         {% if not it.already_in_db %}checked{% endif %}></td>
+              <td>{{ it.value }}</td>
+              <td>
+                {% if it.in_rpz %}<span class="badge bg-success">уже в RPZ</span>
+                {% elif it.already_in_db %}<span class="badge bg-secondary">уже в базе</span>
+                {% else %}<span class="badge bg-warning text-dark">новый</span>{% endif %}
+              </td>
+            </tr>
+            {% else %}<tr><td colspan="3" class="text-center text-muted">Доменов не найдено.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# --- IP --- #}
+    <div class="tab-pane fade" id="t-ip">
+      <div class="mb-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.si', true)">Выбрать все</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.si', false)">Снять все</button>
+        <span class="text-muted small ms-2">IP в RPZ не выгружаются — блокируются на межсетевом экране.</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover bg-white">
+          <thead class="table-dark"><tr><th></th><th>IP-адрес</th><th>Статус</th></tr></thead>
+          <tbody>
+            {% for it in groups.ips %}
+            <tr>
+              <td><input type="checkbox" class="form-check-input si" name="selected" value="{{ it.value }}"
+                         {% if not it.already_in_db %}checked{% endif %}></td>
+              <td>{{ it.value }}</td>
+              <td>{% if it.already_in_db %}<span class="badge bg-secondary">уже в базе</span>
+                  {% else %}<span class="badge bg-warning text-dark">новый</span>{% endif %}</td>
+            </tr>
+            {% else %}<tr><td colspan="3" class="text-center text-muted">IP-адресов не найдено.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# --- URL --- #}
+    <div class="tab-pane fade" id="t-url">
+      <div class="mb-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.su', true)">Выбрать все</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.su', false)">Снять все</button>
+        <span class="text-muted small ms-2">Пути RPZ не блокирует — хост сохраняется отдельно в «Домены».</span>
+      </div>
+      <div class="table-responsive">
+        <table class="table table-sm table-hover bg-white">
+          <thead class="table-dark"><tr><th></th><th>URL</th><th>Хост</th><th>Статус</th></tr></thead>
+          <tbody>
+            {% for it in groups.urls %}
+            <tr>
+              <td><input type="checkbox" class="form-check-input su" name="selected_url" value="{{ it.value }}"
+                         {% if not it.already_in_db %}checked{% endif %}></td>
+              <td class="url-cell"><code>{{ it.value }}</code></td>
+              <td>{{ it.host }}</td>
+              <td>{% if it.already_in_db %}<span class="badge bg-secondary">уже в базе</span>
+                  {% else %}<span class="badge bg-warning text-dark">новый</span>{% endif %}</td>
+            </tr>
+            {% else %}<tr><td colspan="4" class="text-center text-muted">Ссылок с путями не найдено.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {# --- Хеши --- #}
+    <div class="tab-pane fade" id="t-hash">
+      <div class="mb-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.sh', true)">Выбрать все</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.sh', false)">Снять все</button>
+      </div>
+      <div class="table-responsive" style="max-height:60vh;overflow:auto">
+        <table class="table table-sm table-hover bg-white table-sticky">
+          <thead class="table-dark"><tr><th></th><th>Хеш</th><th>Тип</th><th>Статус</th></tr></thead>
+          <tbody>
+            {% for it in groups.hashes %}
+            <tr>
+              <td><input type="checkbox" class="form-check-input sh" name="selected_hash" value="{{ it.value }}"
+                         {% if not it.already_in_db %}checked{% endif %}></td>
+              <td><code>{{ it.value }}</code></td>
+              <td><span class="badge bg-info text-dark">{{ it.type }}</span></td>
+              <td>{% if it.already_in_db %}<span class="badge bg-secondary">уже в базе</span>
+                  {% else %}<span class="badge bg-warning text-dark">новый</span>{% endif %}</td>
+            </tr>
+            {% else %}<tr><td colspan="4" class="text-center text-muted">Хешей не найдено.</td></tr>{% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
-  <div class="table-responsive">
-    <table class="table table-sm table-hover bg-white">
-      <thead class="table-dark">
-        <tr><th></th><th>Хеш</th><th>Тип</th><th>Статус</th></tr>
-      </thead>
-      <tbody>
-        {% for it in hash_items %}
-        <tr>
-          <td>
-            <input type="checkbox" class="form-check-input selh" name="selected_hash" value="{{ it.value }}"
-              {% if not it.already_in_db %}checked{% endif %}>
-          </td>
-          <td><code>{{ it.value }}</code></td>
-          <td><span class="badge bg-info text-dark">{{ it.type }}</span></td>
-          <td>{% if it.already_in_db %}<span class="badge bg-secondary">уже в базе</span>{% else %}<span class="badge bg-success">новый</span>{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% endif %}
-
-  <button type="submit" class="btn btn-primary">Сохранить выбранные</button>
-  <a href="{{ url_for('main.upload') }}" class="btn btn-outline-secondary">Отмена</a>
 </form>
-{% endblock %}
-{% block scripts %}
-<script>
-function toggleAll(sel, state){ document.querySelectorAll(sel).forEach(c => c.checked = state); }
-</script>
 {% endblock %}

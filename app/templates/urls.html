@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}URL с путями{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Ссылки с путями</h3>
+  <a href="{{ url_for('main.urls_csv') }}" class="btn btn-sm btn-outline-secondary">⬇ CSV</a>
+</div>
+
+<div class="alert alert-info small">
+  RPZ работает на уровне DNS-имён и <strong>не умеет блокировать конкретные пути</strong>,
+  поэтому такие индикаторы вынесены отдельно — их блокируют на прокси/WAF.
+  Хост каждой ссылки при этом сохранён в разделе
+  <a href="{{ url_for('main.candidates', type='domain') }}">Кандидаты → Домены</a>
+  и может быть выгружен в RPZ.
+</div>
+
+<form method="get" class="row g-2 mb-3">
+  <div class="col-auto">
+    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+           placeholder="Поиск по ссылке" style="min-width:280px">
+  </div>
+  <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">Найти</button></div>
+</form>
+
+<div class="table-responsive">
+  <table class="table table-sm table-striped bg-white">
+    <thead class="table-dark">
+      <tr><th>URL</th><th>Хост</th><th>Источник</th><th>Добавлен (UTC)</th></tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td class="url-cell"><code>{{ it.value }}</code></td>
+        <td>{{ it.host }}</td>
+        <td class="text-muted">{{ it.document.filename if it.document else '—' }}</td>
+        <td class="text-muted">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="text-center text-muted">Ссылок с путями нет.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% include "_pagination.html" %}
+{% endblock %}

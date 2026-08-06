@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Выгрузка в RPZ{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Выгрузка доменов в RPZ-зону</h3>
+  <a href="{{ url_for('main.push_history') }}" class="btn btn-sm btn-outline-secondary">Журнал выгрузок</a>
+</div>
+
+{% if not server %}
+<div class="alert alert-warning">
+  Учётная запись SSH не настроена.
+  {% if current_user.is_operator %}<a href="{{ url_for('main.settings') }}">Настроить</a>{% endif %}
+</div>
+{% endif %}
+
+{% if not snapshot %}
+<div class="alert alert-info">
+  Файл RPZ ещё не считывался, поэтому колонка «в зоне» может быть неточной.
+  Сначала нажмите «Обновить с сервера» на странице
+  <a href="{{ url_for('main.rpz_view') }}">Заблокировано</a>.
+</div>
+{% else %}
+<p class="text-muted">
+  Состояние зоны на {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC.
+  Не в зоне: <strong>{{ pending_count }}</strong> из {{ rows|length }} доменов.
+</p>
+{% endif %}
+
+<div class="alert alert-secondary small">
+  <strong>Как это работает безопасно:</strong> перед записью создаётся резервная копия зоны,
+  serial в SOA увеличивается автоматически, новый файл проверяется через
+  <code>named-checkzone</code>, и только затем содержимое устанавливается и выполняется
+  <code>rndc reload</code>. При любой ошибке выполняется автоматический откат.
+  Начните с кнопки <strong>«Предпросмотр»</strong> — она ничего не меняет на сервере.
+  {% if ip_count %}<br>IP-адреса ({{ ip_count }}) в RPZ не выгружаются — их блокируют на межсетевом экране.{% endif %}
+</div>
+
+<form method="post" action="{{ url_for('main.push_run') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="d-flex gap-2 align-items-center mb-2 flex-wrap">
+    <input type="text" id="pushSearch" class="form-control form-control-sm" style="max-width:260px"
+           placeholder="Поиск по домену" onkeyup="filterTable('pushSearch','pushTable')">
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.pd', true)">Выбрать все</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll('.pd', false)">Снять все</button>
+    <button type="button" class="btn btn-sm btn-outline-primary" onclick="selectPending()">Выбрать только отсутствующие в зоне</button>
+    <span class="ms-auto">
+      {% if current_user.is_operator %}
+      <button type="submit" name="dry_run" value="1" class="btn btn-sm btn-info">🔍 Предпросмотр (без изменений)</button>
+      <button type="submit" class="btn btn-sm btn-danger"
+              onclick="return confirm('Выгрузить выбранные домены в боевую RPZ-зону?\n\nБудет создана резервная копия, зона проверена и перезагружена.');">
+        ⬆️ Выгрузить на сервер
+      </button>
+      {% endif %}
+    </span>
+  </div>
+
+  <div class="table-responsive" style="max-height:65vh; overflow:auto">
+    <table class="table table-sm table-hover bg-white table-sticky" id="pushTable">
+      <thead class="table-dark">
+        <tr>
+          <th style="width:36px"></th>
+          <th>Домен</th>
+          <th>В зоне RPZ</th>
+          <th>Статус</th>
+          <th>Выгружен</th>
+          <th>Источник</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            <input type="checkbox" class="form-check-input pd" name="domains" value="{{ r.value }}"
+                   data-inrpz="{{ '1' if r.in_rpz else '0' }}" {% if r.in_rpz %}disabled title="Уже в зоне"{% endif %}>
+          </td>
+          <td>{{ r.value }}</td>
+          <td>
+            {% if r.in_rpz %}<span class="badge bg-success">да</span>
+            {% else %}<span class="badge bg-warning text-dark">нет</span>{% endif %}
+          </td>
+          <td>
+            {% if r.status=='pushed' %}<span class="badge bg-success">выгружен</span>
+            {% elif r.status=='in_rpz' %}<span class="badge bg-secondary">в RPZ</span>
+            {% else %}<span class="badge bg-warning text-dark">новый</span>{% endif %}
+          </td>
+          <td class="text-muted">{{ r.pushed_at.strftime('%d.%m.%Y %H:%M') if r.pushed_at else '—' }}</td>
+          <td class="text-muted">{{ r.document or '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted">
+          Доменов нет. Загрузите письмо ФСТЭК в разделе «Загрузить письмо».
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+function selectPending(){
+  document.querySelectorAll('.pd').forEach(c => {
+    if(!c.disabled) c.checked = c.dataset.inrpz === '0';
+  });
+}
+</script>
+{% endblock %}

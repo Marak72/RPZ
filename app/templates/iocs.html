@@ -1,23 +1,31 @@
 {% extends "base.html" %}
 {% block title %}Хеши (IoC){% endblock %}
 {% block content %}
-<h3 class="mb-3">Хеши — индикаторы компрометации (IoC)</h3>
-<p class="text-muted">Хеши не блокируются в RPZ — это индикаторы для систем
-  мониторинга (SIEM).</p>
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="mb-0">Хеши — индикаторы компрометации</h3>
+  <a href="{{ url_for('main.iocs_csv', **request.args) }}" class="btn btn-sm btn-outline-secondary">⬇ CSV</a>
+</div>
+<p class="text-muted">Хеши не блокируются в RPZ — это индикаторы для систем мониторинга (SIEM).</p>
+
+<ul class="nav nav-pills mb-3">
+  <li class="nav-item">
+    <a class="nav-link {% if not htype %}active{% endif %}" href="{{ url_for('main.iocs') }}">Все</a>
+  </li>
+  {% for t, c in counts.items() %}
+  <li class="nav-item">
+    <a class="nav-link {% if htype==t %}active{% endif %}" href="{{ url_for('main.iocs', type=t) }}">
+      {{ t }} <span class="badge bg-light text-dark">{{ c }}</span></a>
+  </li>
+  {% endfor %}
+</ul>
 
 <form method="get" class="row g-2 mb-3">
+  {% if htype %}<input type="hidden" name="type" value="{{ htype }}">{% endif %}
   <div class="col-auto">
-    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Поиск по хешу">
+    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
+           placeholder="Поиск по хешу" style="min-width:280px">
   </div>
-  <div class="col-auto">
-    <select name="type" class="form-select form-select-sm">
-      <option value="">Все типы</option>
-      <option value="sha256" {% if htype=='sha256' %}selected{% endif %}>sha256</option>
-      <option value="sha1" {% if htype=='sha1' %}selected{% endif %}>sha1</option>
-      <option value="md5" {% if htype=='md5' %}selected{% endif %}>md5</option>
-    </select>
-  </div>
-  <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">Применить</button></div>
+  <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">Найти</button></div>
 </form>
 
 <div class="table-responsive">
@@ -30,8 +38,8 @@
       <tr>
         <td><code>{{ it.value }}</code></td>
         <td><span class="badge bg-info text-dark">{{ it.hash_type }}</span></td>
-        <td>{{ it.document.filename if it.document else '—' }}</td>
-        <td>{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        <td class="text-muted">{{ it.document.filename if it.document else '—' }}</td>
+        <td class="text-muted">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
       </tr>
       {% else %}
       <tr><td colspan="4" class="text-center text-muted">Хешей нет.</td></tr>
@@ -39,5 +47,5 @@
     </tbody>
   </table>
 </div>
-<p class="text-muted">Всего: {{ items|length }}</p>
+{% include "_pagination.html" %}
 {% endblock %}
