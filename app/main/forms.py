@@ -42,7 +42,12 @@ class SshServerForm(FlaskForm):
         validators=[DataRequired()],
         default="rpz.block",
     )
-    use_sudo = BooleanField("Выполнять команды через sudo -n", default=False)
+    use_sudo = BooleanField(
+        "Файловые операции через sudo -n (если нет прав на файл зоны)", default=False
+    )
+    sudo_rndc = BooleanField(
+        "Только rndc reload через sudo -n (узкое правило в sudoers)", default=False
+    )
     validate_zone = BooleanField(
         "Проверять зону через named-checkzone перед записью", default=True
     )

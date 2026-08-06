@@ -69,8 +69,12 @@ class SshServer(db.Model):
     )
     # Имя зоны для named-checkzone и `rndc reload <zone>`.
     zone_name = db.Column(db.String(255), nullable=False, default="rpz.block")
-    # Выполнять команды на сервере через sudo -n (если УЗ не root).
+    # Выполнять файловые операции на сервере через sudo -n (если нет прав на файл).
     use_sudo = db.Column(db.Boolean, nullable=False, default=False)
+    # Выполнять ТОЛЬКО `rndc reload <зона>` через sudo -n. Вызывается напрямую,
+    # без обёртки sh -c, чтобы подходило узкое правило в sudoers:
+    #   rpzbot ALL=(root) NOPASSWD: /usr/sbin/rndc reload rpz.block
+    sudo_rndc = db.Column(db.Boolean, nullable=False, default=False)
     # Проверять зону через named-checkzone перед установкой (настоятельно да).
     validate_zone = db.Column(db.Boolean, nullable=False, default=True)
     # Перезагружать зону через rndc reload после установки.

@@ -731,6 +731,7 @@ def _apply_server_form(form, server) -> None:
     server.zone_file_path = form.zone_file_path.data
     server.zone_name = form.zone_name.data
     server.use_sudo = form.use_sudo.data
+    server.sudo_rndc = form.sudo_rndc.data
     server.validate_zone = form.validate_zone.data
     server.reload_zone = form.reload_zone.data
     server.is_active = form.is_active.data

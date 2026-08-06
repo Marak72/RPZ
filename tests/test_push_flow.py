@@ -33,6 +33,7 @@ class FakeServer:
     zone_file_path = "/var/named/master/rpz.block.db"
     zone_name = "rpz.block"
     use_sudo = False
+    sudo_rndc = False
     validate_zone = True
     reload_zone = True
 
@@ -46,16 +47,20 @@ class FakeClient:
         self.write_fails = write_fails
         self.reload_fails = reload_fails
         self.commands = []
+        self.sudo_calls = []
 
     # -- эмуляция команд --
     def run(self, command):
         self.commands.append(command)
         argv = shlex.split(command)
+        # Снять префикс `sudo -n` (узкий вызов rndc идёт без обёртки sh -c).
+        if argv[:2] == ["sudo", "-n"]:
+            self.sudo_calls.append(argv[2:])
+            argv = argv[2:]
         # Развернуть обёртку `sh -c '<скрипт>'` (её ставит sudo_wrap).
-        if argv[:2] == ["sh", "-c"] or argv[:3] == ["sudo", "-n", "sh"]:
-            script = argv[-1]
-            return self._run_script(script)
-        return self._run_script(command)
+        if argv[:2] == ["sh", "-c"]:
+            return self._run_script(argv[-1])
+        return self._run_script(shlex.join(argv))
 
     def _run_script(self, script):
         if "command -v named-checkzone" in script:
@@ -204,6 +209,25 @@ def test_all_domains_invalid_aborts(patched):
     with pytest.raises(PushError, match="Нет корректных доменов"):
         rpz_writer.push_domains(FakeServer(), ["contract.exe"])
     assert client.files[FakeServer.zone_file_path] == ZONE
+
+
+def test_push_with_narrow_sudo_for_rndc_only(patched):
+    """Непривилегированная УЗ: права на файл через группу, reload — через sudo.
+
+    Проверяем, что под sudo уходит РОВНО одна команда и ровно в том виде,
+    который разрешён правилом sudoers:
+        rpzbot ALL=(root) NOPASSWD: /usr/sbin/rndc reload rpz.block
+    """
+    client = patched(FakeClient())
+    server = FakeServer()
+    server.sudo_rndc = True
+
+    result = rpz_writer.push_domains(server, ["evil.com"])
+    assert result.status == "success"
+    assert "evil.com CNAME rpz-drop." in client.files[FakeServer.zone_file_path]
+
+    # Под sudo прошёл только rndc reload — файловые операции выполнены от УЗ.
+    assert client.sudo_calls == [["/usr/sbin/rndc", "reload", "rpz.block"]]
 
 
 def test_temp_file_is_cleaned_up(patched):

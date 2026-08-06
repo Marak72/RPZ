@@ -140,6 +140,20 @@ def build_new_content(
     return content, old_serial, new
 
 
+def rndc_command(server, rndc_path: str) -> str:
+    """Собрать команду перезагрузки зоны.
+
+    rndc вызывается НАПРЯМУЮ (без обёртки `sh -c`), чтобы подходило узкое
+    правило в sudoers, разрешающее ровно одну команду:
+
+        rpzbot ALL=(root) NOPASSWD: /usr/sbin/rndc reload rpz.block
+    """
+    command = f"{rndc_path} reload {shell_quote(server.zone_name)}"
+    if getattr(server, "sudo_rndc", False) or getattr(server, "use_sudo", False):
+        return f"sudo -n {command}"
+    return command
+
+
 def validate_domains(domains) -> tuple[list[str], list[str]]:
     """Разделить домены на корректные и отклонённые (в зону пишем только чистые)."""
     ok: list[str] = []
@@ -266,9 +280,7 @@ def push_domains(
                 if not rndc:
                     raise PushError("На сервере не найден rndc — не удалось перезагрузить зону.")
                 rc, out, err = run_command(
-                    client,
-                    sudo_wrap(server, f"{rndc} reload {shell_quote(server.zone_name)}"),
-                    timeout=timeout,
+                    client, rndc_command(server, rndc), timeout=timeout
                 )
                 if rc != 0:
                     raise PushError(f"rndc reload завершился с ошибкой: {out} {err}".strip())
@@ -323,11 +335,7 @@ def _rollback(client, server, backup_path: str, timeout: int, result: PushResult
     if server.reload_zone:
         rndc = _find_binary(client, "rndc")
         if rndc:
-            run_command(
-                client,
-                sudo_wrap(server, f"{rndc} reload {shell_quote(server.zone_name)}"),
-                timeout=timeout,
-            )
+            run_command(client, rndc_command(server, rndc), timeout=timeout)
             result.steps.append("Зона перезагружена после отката")
     return True
 

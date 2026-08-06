@@ -137,10 +137,24 @@ def test_connection(server, timeout: int = 15) -> dict:
 
         # Наличие rndc.
         rc, out, _ = run_command(client, "command -v rndc || command -v /usr/sbin/rndc")
-        checks["rndc"] = out if rc == 0 and out else "не найден"
+        rndc_path = out.splitlines()[0].strip() if rc == 0 and out else ""
+        checks["rndc"] = rndc_path or "не найден"
 
         if getattr(server, "use_sudo", False):
             rc, _, err = run_command(client, "sudo -n true")
             checks["sudo"] = "работает без пароля" if rc == 0 else f"НЕ работает: {err}"
+
+        # Разрешена ли ровно та команда reload, которую будет выполнять приложение.
+        # `sudo -l <команда>` только ПРОВЕРЯЕТ право, ничего не выполняя.
+        if getattr(server, "sudo_rndc", False) and rndc_path:
+            rc, _, err = run_command(
+                client,
+                f"sudo -n -l {rndc_path} reload {shell_quote(server.zone_name)}",
+            )
+            checks["sudo_rndc"] = (
+                "разрешён без пароля"
+                if rc == 0
+                else f"НЕ разрешён — проверьте sudoers ({err})"
+            )
 
     return checks

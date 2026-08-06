@@ -83,6 +83,36 @@ def test_validate_domains_filters_junk():
     assert "1.2.3.4" in rejected  # IP в RPZ-зону доменов не пишем
 
 
+class _Srv:
+    zone_name = "rpz.block"
+    use_sudo = False
+    sudo_rndc = False
+
+
+def test_rndc_command_plain():
+    s = _Srv()
+    assert rpz_writer.rndc_command(s, "/usr/sbin/rndc") == \
+        "/usr/sbin/rndc reload 'rpz.block'"
+
+
+def test_rndc_command_matches_narrow_sudoers_rule():
+    """Команда должна подходить под правило:
+    rpzbot ALL=(root) NOPASSWD: /usr/sbin/rndc reload rpz.block
+    """
+    import shlex
+
+    s = _Srv()
+    s.sudo_rndc = True
+    cmd = rpz_writer.rndc_command(s, "/usr/sbin/rndc")
+    # Никакой обёртки sh -c — иначе узкое правило sudoers не сработает.
+    assert "sh -c" not in cmd
+    assert cmd.startswith("sudo -n /usr/sbin/rndc reload")
+    # После разбора шеллом argv точно совпадает с правилом в sudoers.
+    assert shlex.split(cmd) == [
+        "sudo", "-n", "/usr/sbin/rndc", "reload", "rpz.block",
+    ]
+
+
 def test_validate_domains_rejects_everything_bad():
     ok, rejected = rpz_writer.validate_domains(["../etc/passwd", "a b c", "-bad-.com"])
     assert ok == []

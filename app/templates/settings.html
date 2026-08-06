@@ -55,11 +55,22 @@
             {{ form.reload_zone(class="form-check-input") }}
             {{ form.reload_zone.label(class="form-check-label") }}
           </div>
+          <div class="form-check mb-2">
+            {{ form.sudo_rndc(class="form-check-input") }}
+            {{ form.sudo_rndc.label(class="form-check-label") }}
+            <div class="form-text">
+              Рекомендуемый вариант для непривилегированной УЗ: права на файл зоны
+              выданы через группу, а перезагрузка — одной разрешённой командой.
+              В <code>visudo</code>:
+              <code>rpzbot ALL=(root) NOPASSWD: /usr/sbin/rndc reload {{ form.zone_name.data or 'rpz.block' }}</code>
+            </div>
+          </div>
           <div class="form-check mb-3">
             {{ form.use_sudo(class="form-check-input") }}
             {{ form.use_sudo.label(class="form-check-label") }}
-            <div class="form-text">Включите, если УЗ не root. Требуется настроенный
-              <code>sudo</code> без пароля (NOPASSWD) для этой учётной записи.</div>
+            <div class="form-text">Нужно, только если у УЗ нет прав на запись в файл
+              зоны. Требует широкого правила sudo (<code>sh -c</code>) — включайте,
+              лишь если права через группу выдать нельзя.</div>
           </div>
           <hr>
 
