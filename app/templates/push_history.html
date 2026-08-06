@@ -1,35 +1,59 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ico %}
 {% block title %}Журнал выгрузок{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h3 class="mb-0">Журнал выгрузок в RPZ</h3>
-  <a href="{{ url_for('main.push_view') }}" class="btn btn-sm btn-outline-primary">К выгрузке</a>
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Журнал выгрузок в RPZ</h2>
+    <p>Каждая попытка записи в боевую зону фиксируется с пошаговым логом.</p>
+  </div>
+  <a class="btn btn--primary" href="{{ url_for('main.push_view') }}">{{ ico.icon('upload') }} К выгрузке</a>
 </div>
-<div class="table-responsive">
-  <table class="table table-sm table-striped bg-white">
-    <thead class="table-dark">
-      <tr><th>#</th><th>Дата (UTC)</th><th>Статус</th><th>Доменов</th><th>Serial</th><th>Кем</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for l in logs %}
-      <tr>
-        <td>{{ l.id }}</td>
-        <td>{{ l.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
-        <td>
-          {% if l.status=='success' %}<span class="badge bg-success">успешно</span>
-          {% elif l.status=='dry_run' %}<span class="badge bg-info text-dark">предпросмотр</span>
-          {% elif l.status=='rolled_back' %}<span class="badge bg-warning text-dark">откат</span>
-          {% else %}<span class="badge bg-danger">ошибка</span>{% endif %}
-        </td>
-        <td>{{ l.entries_count }}</td>
-        <td class="text-muted">{{ l.old_serial }} → {{ l.new_serial }}</td>
-        <td>{{ l.user.username if l.user else '—' }}</td>
-        <td><a href="{{ url_for('main.push_log_view', log_id=l.id) }}" class="btn btn-sm btn-outline-primary">Открыть</a></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="7" class="text-center text-muted">Выгрузок ещё не было.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>#</th><th>Дата (UTC)</th><th>Результат</th><th class="num">Доменов</th>
+            <th>Serial</th><th>Оператор</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for l in logs %}
+        <tr>
+          <td class="muted">{{ l.id }}</td>
+          <td class="nowrap">{{ l.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>
+            {% if l.status == 'success' %}<span class="badge badge--success">{{ ico.icon('check', 'icon icon-sm') }} успешно</span>
+            {% elif l.status == 'dry_run' %}<span class="badge badge--info">предпросмотр</span>
+            {% elif l.status == 'rolled_back' %}<span class="badge badge--warning">откат выполнен</span>
+            {% else %}<span class="badge badge--danger">ошибка</span>{% endif %}
+          </td>
+          <td class="num">{{ l.entries_count }}</td>
+          <td class="mono muted text-xs nowrap">
+            {% if l.old_serial %}{{ l.old_serial }} → {{ l.new_serial }}{% else %}—{% endif %}
+          </td>
+          <td>{{ l.user.username if l.user else '—' }}</td>
+          <td class="num">
+            <a class="btn btn--sm" href="{{ url_for('main.push_log_view', log_id=l.id) }}">
+              {{ ico.icon('eye', 'icon icon-sm') }} Открыть
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="7">
+            <div class="empty">
+              {{ ico.icon('upload') }}
+              <div class="empty__title">Выгрузок ещё не было</div>
+              <div class="empty__text">Начните с предпросмотра — он ничего не меняет на сервере.</div>
+              <a class="btn btn--primary btn--sm" href="{{ url_for('main.push_view') }}">Перейти к выгрузке</a>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}

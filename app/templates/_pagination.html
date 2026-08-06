@@ -1,20 +1,24 @@
-{% if pagination and pagination.pages > 1 %}
-<nav>
-  <ul class="pagination pagination-sm">
-    {% for p in pagination.iter_pages(left_edge=2, left_current=2, right_current=3, right_edge=2) %}
+{% if pagination %}
+<div class="pagination">
+  {% if pagination.pages > 1 %}
+  <div class="pagination__pages">
+    {% for p in pagination.iter_pages(left_edge=1, left_current=2, right_current=2, right_edge=1) %}
       {% if p %}
         {% set args = request.args.to_dict() %}
         {% set _ = args.update({'page': p}) %}
-        <li class="page-item {% if p == pagination.page %}active{% endif %}">
-          <a class="page-link" href="{{ url_for(request.endpoint, **args) }}">{{ p }}</a>
-        </li>
+        <a class="page-link {% if p == pagination.page %}is-active{% endif %}"
+           href="{{ url_for(request.endpoint, **args) }}">{{ p }}</a>
       {% else %}
-        <li class="page-item disabled"><span class="page-link">…</span></li>
+        <span class="page-link is-gap">…</span>
       {% endif %}
     {% endfor %}
-  </ul>
-</nav>
-<p class="text-muted small">Всего записей: {{ pagination.total }}</p>
-{% else %}
-<p class="text-muted small">Всего записей: {{ pagination.total if pagination else items|length }}</p>
+  </div>
+  {% endif %}
+  <div class="pagination__info">
+    {% if pagination.pages > 1 %}
+      Страница {{ pagination.page }} из {{ pagination.pages }} ·
+    {% endif %}
+    всего записей: {{ pagination.total }}
+  </div>
+</div>
 {% endif %}

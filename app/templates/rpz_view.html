@@ -1,81 +1,112 @@
 {% extends "base.html" %}
-{% block title %}Заблокированные домены — РПЗ ФСТЭК{% endblock %}
+{% import "_icons.html" as ico %}
+{% block title %}Заблокировано{% endblock %}
+{% block subheading %}<div class="topbar__sub">Живые данные RPZ-зоны DNS-сервера</div>{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h3 class="mb-0">Заблокированные домены (RPZ)</h3>
-  <div>
-    <a href="{{ url_for('main.rpz_csv') }}" class="btn btn-outline-secondary btn-sm">⬇ CSV</a>
-    <a href="{{ url_for('main.rpz_history') }}" class="btn btn-outline-secondary btn-sm">История</a>
-    <a href="{{ url_for('main.push_view') }}" class="btn btn-outline-primary btn-sm">⬆️ Выгрузка</a>
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Заблокированные домены</h2>
+    <p>
+      {% if snapshot %}
+        Считано {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC
+        (<span data-since="{{ snapshot.fetched_at.timestamp()|int }}"></span>){% if snapshot.user %},
+        {{ snapshot.user.username }}{% endif %} ·
+        {{ snapshot.entry_count }} записей в файле
+      {% else %}
+        Файл зоны ещё не считывался с сервера
+      {% endif %}
+    </p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('main.rpz_csv') }}">{{ ico.icon('download') }} Экспорт CSV</a>
+    <a class="btn" href="{{ url_for('main.rpz_history') }}">{{ ico.icon('clock') }} История</a>
+    <a class="btn" href="{{ url_for('main.push_view') }}">{{ ico.icon('upload') }} Выгрузка</a>
     {% if current_user.is_operator %}
-    <form method="post" action="{{ url_for('main.rpz_refresh') }}" class="d-inline">
+    <form method="post" action="{{ url_for('main.rpz_refresh') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-primary btn-sm">🔄 Обновить с сервера (SSH)</button>
+      <button class="btn btn--primary">{{ ico.icon('refresh') }} Обновить с сервера</button>
     </form>
     {% endif %}
   </div>
 </div>
 
-{% if snapshot %}
-  <p class="text-muted">
-    Последнее чтение: {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC
-    {% if snapshot.user %} · {{ snapshot.user.username }}{% endif %}
-    {% if snapshot.server %} · {{ snapshot.server.host }}{% endif %}
-    · записей: {{ snapshot.entry_count }}
-  </p>
-{% else %}
-  <div class="alert alert-info">Файл RPZ ещё не считывался.
-    {% if current_user.is_operator %}Нажмите «Обновить с сервера».{% endif %}
-  </div>
-{% endif %}
-
-<form method="get" class="row g-2 mb-3">
-  <div class="col-auto">
-    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Поиск по домену">
-  </div>
-  <div class="col-auto">
-    <select name="action" class="form-select form-select-sm">
-      <option value="">Все действия</option>
-      <option value="block" {% if action=='block' %}selected{% endif %}>Блокировка</option>
-      <option value="redirect" {% if action=='redirect' %}selected{% endif %}>Перенаправление</option>
-    </select>
-  </div>
-  <div class="col-auto">
-    <button class="btn btn-sm btn-outline-secondary">Применить</button>
-  </div>
-</form>
-
-<div class="table-responsive">
-  <table class="table table-sm table-striped table-hover bg-white">
-    <thead class="table-dark">
-      <tr>
-        <th>Домен</th>
-        <th>Тип</th>
-        <th>Действие</th>
-        <th>Цель</th>
-        <th>Wildcard</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for r in rows %}
-      <tr>
-        <td>{{ r.domain }}</td>
-        <td><span class="badge bg-secondary">{{ r.record_type }}</span></td>
-        <td>
-          {% if r.action == 'block' %}
-            <span class="badge bg-danger">Блокировка</span>
-          {% else %}
-            <span class="badge bg-warning text-dark">Перенаправление</span>
-          {% endif %}
-        </td>
-        <td><code>{{ r.target }}</code></td>
-        <td>{% if r.has_wildcard %}<span class="badge bg-info text-dark">*.домен</span>{% endif %}</td>
-      </tr>
+{% if not snapshot %}
+<div class="card">
+  <div class="empty">
+    {{ ico.icon('lock') }}
+    <div class="empty__title">Зона ещё не считывалась</div>
+    <div class="empty__text">
+      {% if current_user.is_operator %}
+        Нажмите «Обновить с сервера» — приложение подключится по SSH, прочитает файл зоны и отключится.
       {% else %}
-      <tr><td colspan="5" class="text-center text-muted">Записей нет.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+        Данные появятся после того, как оператор считает зону с сервера.
+      {% endif %}
+    </div>
+    {% if current_user.is_operator and not server %}
+    <a class="btn btn--primary btn--sm" href="{{ url_for('main.settings') }}">{{ ico.icon('settings') }} Настроить подключение</a>
+    {% endif %}
+  </div>
 </div>
-<p class="text-muted">Показано доменов: {{ rows|length }}</p>
+{% else %}
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по домену" data-search-focus>
+      </div>
+      <select name="action" class="input--auto" onchange="this.form.submit()">
+        <option value="">Все действия</option>
+        <option value="block" {% if action == 'block' %}selected{% endif %}>Блокировка</option>
+        <option value="redirect" {% if action == 'redirect' %}selected{% endif %}>Перенаправление</option>
+      </select>
+      <button class="btn btn--sm">Применить</button>
+      {% if q or action %}<a class="btn btn--ghost btn--sm" href="{{ url_for('main.rpz_view') }}">Сбросить</a>{% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <span class="text-xs muted">Показано: {{ rows|length }} из {{ blocked_total }}</span>
+    <button type="button" class="btn btn--sm" data-copy-column="rpzTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+    </button>
+  </div>
+
+  <div class="table-wrap table-wrap--tall">
+    <table class="table" id="rpzTable">
+      <thead>
+        <tr><th>Домен</th><th>Тип</th><th>Действие</th><th>Цель</th><th>Wildcard</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="value" data-value="{{ r.domain }}">
+            {{ r.domain }}
+            <button type="button" class="copy-btn" data-copy="{{ r.domain }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td><span class="badge badge--neutral">{{ r.record_type }}</span></td>
+          <td>
+            {% if r.action == 'block' %}<span class="badge badge--danger">блокировка</span>
+            {% else %}<span class="badge badge--warning">перенаправление</span>{% endif %}
+          </td>
+          <td class="mono muted">{{ r.target }}</td>
+          <td>{% if r.has_wildcard %}<span class="badge badge--info">*.домен</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="5">
+            <div class="empty">
+              {{ ico.icon('search') }}
+              <div class="empty__title">Ничего не найдено</div>
+              <div class="empty__text">Измените условия фильтра.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
 {% endblock %}

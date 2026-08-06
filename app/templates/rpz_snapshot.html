@@ -1,40 +1,70 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ico %}
 {% block title %}Снимок RPZ #{{ snapshot.id }}{% endblock %}
-{% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h3 class="mb-0">Снимок RPZ от {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC</h3>
-  <a href="{{ url_for('main.rpz_history') }}" class="btn btn-sm btn-outline-secondary">← К истории</a>
-</div>
-<p class="text-muted">
-  Кем: {{ snapshot.user.username if snapshot.user else '—' }} ·
-  Сервер: {{ snapshot.server.host if snapshot.server else '—' }} ·
-  Записей: {{ snapshot.entry_count }}
-</p>
 
-<ul class="nav nav-tabs mb-3" role="tablist">
-  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tbl">Таблица</button></li>
-  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#raw">Исходный файл</button></li>
-</ul>
-<div class="tab-content">
-  <div class="tab-pane fade show active" id="tbl">
-    <div class="table-responsive">
-      <table class="table table-sm table-striped bg-white">
-        <thead class="table-dark"><tr><th>Домен</th><th>Тип</th><th>Действие</th><th>Цель</th></tr></thead>
-        <tbody>
-          {% for r in rows %}
-          <tr>
-            <td>{{ r.domain }}</td>
-            <td>{{ r.record_type }}</td>
-            <td>{% if r.action=='block' %}<span class="badge bg-danger">Блокировка</span>{% else %}<span class="badge bg-warning text-dark">Перенаправление</span>{% endif %}</td>
-            <td><code>{{ r.target }}</code></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Снимок зоны от {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC</h2>
+    <p>
+      Оператор: {{ snapshot.user.username if snapshot.user else '—' }} ·
+      сервер: {{ snapshot.server.host if snapshot.server else '—' }} ·
+      записей: {{ snapshot.entry_count }}
+    </p>
+  </div>
+  <a class="btn" href="{{ url_for('main.rpz_history') }}">← К истории</a>
+</div>
+
+<div data-tabs class="tabs">
+  <button class="tab is-active" data-tab="table">{{ ico.icon('list', 'icon icon-sm') }} Таблица
+    <span class="tab__count">{{ rows|length }}</span></button>
+  <button class="tab" data-tab="raw">{{ ico.icon('file', 'icon icon-sm') }} Исходный файл</button>
+</div>
+
+<div>
+  <div data-tab-panel="table" class="tab-panel is-active">
+    <div class="card">
+      <div class="toolbar">
+        <div class="search">
+          {{ ico.icon('search') }}
+          <input type="search" placeholder="Поиск по домену" data-filter="snapTable">
+          <kbd>/</kbd>
+        </div>
+        <div class="toolbar__spacer"></div>
+        <button type="button" class="btn btn--sm" data-copy-column="snapTable">
+          {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+        </button>
+      </div>
+      <div class="table-wrap table-wrap--tall">
+        <table class="table" id="snapTable">
+          <thead><tr><th>Домен</th><th>Тип</th><th>Действие</th><th>Цель</th></tr></thead>
+          <tbody>
+            {% for r in rows %}
+            <tr>
+              <td class="value" data-value="{{ r.domain }}">{{ r.domain }}</td>
+              <td><span class="badge badge--neutral">{{ r.record_type }}</span></td>
+              <td>
+                {% if r.action == 'block' %}<span class="badge badge--danger">блокировка</span>
+                {% else %}<span class="badge badge--warning">перенаправление</span>{% endif %}
+              </td>
+              <td class="mono muted">{{ r.target }}</td>
+            </tr>
+            {% else %}
+            <tr data-empty><td colspan="4"><div class="empty">
+              <div class="empty__title">В снимке нет записей</div></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
-  <div class="tab-pane fade" id="raw">
-    <pre class="bg-white p-3 border rounded" style="max-height:500px;overflow:auto">{{ snapshot.raw_content }}</pre>
+
+  <div data-tab-panel="raw" class="tab-panel">
+    <div class="card">
+      <div class="card__body">
+        <pre class="log log--dark">{{ snapshot.raw_content }}</pre>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

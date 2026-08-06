@@ -1,25 +1,49 @@
-{% extends "base.html" %}
-{% block title %}Вход — РПЗ ФСТЭК{% endblock %}
-{% block content %}
-<div class="row justify-content-center">
-  <div class="col-md-4">
-    <div class="card shadow-sm">
-      <div class="card-body">
-        <h4 class="card-title mb-3">Вход в систему</h4>
-        <form method="post">
-          {{ form.hidden_tag() }}
-          <div class="mb-3">
-            {{ form.username.label(class="form-label") }}
-            {{ form.username(class="form-control") }}
-          </div>
-          <div class="mb-3">
-            {{ form.password.label(class="form-label") }}
-            {{ form.password(class="form-control") }}
-          </div>
-          {{ form.submit(class="btn btn-primary w-100") }}
-        </form>
-      </div>
-    </div>
+{% import "_icons.html" as ico %}
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вход — РПЗ ФСТЭК</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><text y='20' font-size='20'>🛡️</text></svg>">
+</head>
+<body class="login-page">
+{% include "_icons.html" %}
+
+<div class="login-card">
+  <div class="login-brand">
+    {{ ico.icon('shield', 'icon') }}
+    <h1>РПЗ ФСТЭК</h1>
   </div>
+  <p class="login-sub">Учёт и блокировка вредоносных доменов</p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+    {% set cat = {'danger':'danger','success':'success','warning':'warning','info':'info'}.get(category, 'info') %}
+    <div class="alert alert--{{ cat }}">
+      {{ ico.icon({'success':'check-circle','danger':'alert','warning':'alert','info':'info'}[cat]) }}
+      <div class="alert__text">{{ message }}</div>
+    </div>
+    {% endfor %}
+  {% endwith %}
+
+  <form method="post">
+    {{ form.hidden_tag() }}
+    <div class="field">
+      {{ form.username.label(class="label") }}
+      {{ form.username(class="", autofocus=true, autocomplete="username") }}
+    </div>
+    <div class="field">
+      {{ form.password.label(class="label") }}
+      {{ form.password(autocomplete="current-password") }}
+    </div>
+    <button type="submit" class="btn btn--primary" style="width:100%">
+      {{ ico.icon('logout') }} Войти
+    </button>
+  </form>
 </div>
-{% endblock %}
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

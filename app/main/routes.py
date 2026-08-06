@@ -47,6 +47,32 @@ HASH_TYPES = ("sha256", "sha1", "md5")
 PER_PAGE = 100
 
 
+@main_bp.app_context_processor
+def inject_nav_counts():
+    """Счётчики для боковой навигации. Ошибки БД не должны ломать страницу."""
+    empty = {"domains": 0, "ips": 0, "urls": 0, "hashes": 0,
+             "blocked": 0, "pending": 0}
+    if not current_user.is_authenticated:
+        return {"nav_counts": empty}
+    try:
+        snap = _latest_snapshot()
+        blocked = {e.domain for e in snap.entries} if snap else set()
+        domains = BlockEntry.query.filter_by(entry_type="domain")
+        return {
+            "nav_counts": {
+                "domains": domains.count(),
+                "ips": BlockEntry.query.filter_by(entry_type="ip").count(),
+                "urls": UrlEntry.query.count(),
+                "hashes": IocHash.query.count(),
+                "blocked": len(blocked),
+                "pending": sum(1 for d in domains.all() if d.value not in blocked),
+            }
+        }
+    except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
+        current_app.logger.exception("Не удалось посчитать навигационные счётчики")
+        return {"nav_counts": empty}
+
+
 def operator_required(view):
     """Доступ только для операторов; менеджеры — только просмотр."""
 

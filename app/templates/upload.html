@@ -1,28 +1,45 @@
 {% extends "base.html" %}
-{% block title %}Загрузка письма ФСТЭК{% endblock %}
+{% import "_icons.html" as ico %}
+{% block title %}Загрузить письмо{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
 {% block content %}
-<div class="row justify-content-center">
-  <div class="col-md-6">
-    <div class="card">
-      <div class="card-body">
-        <h4 class="card-title mb-3">Загрузка письма ФСТЭК</h4>
-        <p class="text-muted">Загрузите документ <code>.docx</code> или <code>.odt</code>.
-          Система извлечёт домены и IP-адреса и покажет их для проверки.</p>
-        <form method="post" enctype="multipart/form-data">
-          {{ form.hidden_tag() }}
-          <div class="mb-3">
-            {{ form.document.label(class="form-label") }}
-            {{ form.document(class="form-control") }}
-            {% for e in form.document.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
-          </div>
-          <div class="mb-3">
-            {{ form.notes.label(class="form-label") }}
-            {{ form.notes(class="form-control") }}
-          </div>
-          {{ form.submit(class="btn btn-primary") }}
-        </form>
-      </div>
-    </div>
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Загрузка письма ФСТЭК</h2>
+    <p>Система извлечёт домены, IP-адреса, ссылки и хеши, а затем покажет их для проверки.</p>
   </div>
+</div>
+
+<div class="card">
+  <div class="card__body">
+    <form method="post" enctype="multipart/form-data">
+      {{ form.hidden_tag() }}
+
+      <div class="field">
+        {{ form.document.label(class="label") }}
+        {{ form.document(accept=".docx,.odt") }}
+        {% for e in form.document.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        <div class="help">Поддерживаются форматы <code>.docx</code> и <code>.odt</code>, до 10 МБ.</div>
+      </div>
+
+      <div class="field">
+        {{ form.notes.label(class="label") }}
+        {{ form.notes(placeholder="например: исх. № 240/54/1234 от 06.08.2026") }}
+        <div class="help">Необязательно — поможет потом найти источник индикатора.</div>
+      </div>
+
+      <button type="submit" class="btn btn--primary">
+        {{ ico.icon('upload') }} Загрузить и распознать
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="note mt-2">
+  <strong>Что распознаёт парсер.</strong> Индикаторы, приведённые в письме отдельными
+  строками или после слов «к адресу…», в том числе замаскированные:
+  <code>example[.]com</code>, <code>hxxp[:]//…</code>, <code>1[.]2[.]3[.]4</code>.
+  Имена вложений, названия ПО и ссылки на документы ФСТЭК отсеиваются автоматически.
 </div>
 {% endblock %}

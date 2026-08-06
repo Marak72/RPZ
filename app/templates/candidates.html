@@ -1,76 +1,110 @@
 {% extends "base.html" %}
-{% block title %}Кандидаты из писем ФСТЭК{% endblock %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ 'IP-адреса' if etype == 'ip' else ('Домены' if etype == 'domain' else 'Кандидаты') }}{% endblock %}
+{% block subheading %}<div class="topbar__sub">Индикаторы из писем ФСТЭК</div>{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h3 class="mb-0">Кандидаты на блокировку</h3>
-  <div>
-    <a href="{{ url_for('main.candidates_csv', **request.args) }}" class="btn btn-sm btn-outline-secondary">⬇ CSV</a>
-    <a href="{{ url_for('main.push_view') }}" class="btn btn-sm btn-primary">⬆️ К выгрузке</a>
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ 'IP-адреса' if etype == 'ip' else ('Домены' if etype == 'domain' else 'Кандидаты на блокировку') }}</h2>
+    <p>
+      {% if etype == 'ip' %}IP-адреса блокируются на межсетевом экране — в RPZ они не выгружаются.
+      {% elif etype == 'domain' %}Домены можно выгрузить в RPZ-зону на DNS-сервере.
+      {% else %}Все индикаторы, извлечённые из писем.{% endif %}
+    </p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('main.candidates_csv', **request.args) }}">{{ ico.icon('download') }} Экспорт CSV</a>
+    {% if etype != 'ip' %}
+    <a class="btn btn--primary" href="{{ url_for('main.push_view') }}">{{ ico.icon('upload') }} К выгрузке</a>
+    {% endif %}
   </div>
 </div>
 
-<ul class="nav nav-pills mb-3">
-  <li class="nav-item">
-    <a class="nav-link {% if not etype %}active{% endif %}" href="{{ url_for('main.candidates') }}">
-      Все <span class="badge bg-light text-dark">{{ counts.all }}</span></a>
-  </li>
-  <li class="nav-item">
-    <a class="nav-link {% if etype=='domain' %}active{% endif %}" href="{{ url_for('main.candidates', type='domain') }}">
-      Домены <span class="badge bg-light text-dark">{{ counts.domain }}</span></a>
-  </li>
-  <li class="nav-item">
-    <a class="nav-link {% if etype=='ip' %}active{% endif %}" href="{{ url_for('main.candidates', type='ip') }}">
-      IP-адреса <span class="badge bg-light text-dark">{{ counts.ip }}</span></a>
-  </li>
-  <li class="nav-item">
-    <a class="nav-link" href="{{ url_for('main.urls') }}">URL с путями →</a>
-  </li>
-</ul>
-
-<form method="get" class="row g-2 mb-3">
-  {% if etype %}<input type="hidden" name="type" value="{{ etype }}">{% endif %}
-  <div class="col-auto">
-    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm" placeholder="Поиск">
-  </div>
-  <div class="col-auto">
-    <select name="status" class="form-select form-select-sm">
-      <option value="">Все статусы</option>
-      <option value="new" {% if status=='new' %}selected{% endif %}>Новый (не в RPZ)</option>
-      <option value="in_rpz" {% if status=='in_rpz' %}selected{% endif %}>Уже в RPZ</option>
-      <option value="pushed" {% if status=='pushed' %}selected{% endif %}>Выгружен нами</option>
-    </select>
-  </div>
-  <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">Применить</button></div>
-</form>
-
-<div class="table-responsive">
-  <table class="table table-sm table-striped bg-white">
-    <thead class="table-dark">
-      <tr><th>Значение</th><th>Тип</th><th>Статус</th><th>Источник</th>
-          <th>Добавлен (UTC)</th><th>Выгружен</th></tr>
-    </thead>
-    <tbody>
-      {% for it in items %}
-      <tr>
-        <td>{{ it.value }}</td>
-        <td>
-          {% if it.entry_type=='ip' %}<span class="badge bg-dark">IP</span>
-          {% else %}<span class="badge bg-secondary">домен</span>{% endif %}
-        </td>
-        <td>
-          {% if it.status=='new' %}<span class="badge bg-warning text-dark">новый</span>
-          {% elif it.status=='in_rpz' %}<span class="badge bg-secondary">в RPZ</span>
-          {% else %}<span class="badge bg-success">выгружен</span>{% endif %}
-        </td>
-        <td class="text-muted">{{ it.document.filename if it.document else '—' }}</td>
-        <td class="text-muted">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
-        <td class="text-muted">{{ it.pushed_at.strftime('%d.%m.%Y %H:%M') if it.pushed_at else '—' }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="6" class="text-center text-muted">Записей нет.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="tabs">
+  <a class="tab {% if not etype %}is-active{% endif %}" href="{{ url_for('main.candidates') }}">
+    Все <span class="tab__count">{{ counts.all }}</span></a>
+  <a class="tab {% if etype == 'domain' %}is-active{% endif %}" href="{{ url_for('main.candidates', type='domain') }}">
+    {{ ico.icon('globe', 'icon icon-sm') }} Домены <span class="tab__count">{{ counts.domain }}</span></a>
+  <a class="tab {% if etype == 'ip' %}is-active{% endif %}" href="{{ url_for('main.candidates', type='ip') }}">
+    {{ ico.icon('server', 'icon icon-sm') }} IP-адреса <span class="tab__count">{{ counts.ip }}</span></a>
+  <a class="tab" href="{{ url_for('main.urls') }}">
+    {{ ico.icon('link', 'icon icon-sm') }} URL с путями</a>
 </div>
-{% include "_pagination.html" %}
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      {% if etype %}<input type="hidden" name="type" value="{{ etype }}">{% endif %}
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по значению" data-search-focus>
+      </div>
+      <select name="status" class="input--auto" onchange="this.form.submit()">
+        <option value="">Все статусы</option>
+        <option value="new" {% if status == 'new' %}selected{% endif %}>Новый (не в RPZ)</option>
+        <option value="in_rpz" {% if status == 'in_rpz' %}selected{% endif %}>Уже в RPZ</option>
+        <option value="pushed" {% if status == 'pushed' %}selected{% endif %}>Выгружен нами</option>
+      </select>
+      <button class="btn btn--sm">Применить</button>
+      {% if q or status %}
+      <a class="btn btn--ghost btn--sm" href="{{ url_for('main.candidates', type=etype) if etype else url_for('main.candidates') }}">Сбросить</a>
+      {% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="candTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+    </button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table" id="candTable">
+      <thead>
+        <tr>
+          <th>Значение</th><th>Тип</th><th>Статус</th>
+          <th>Источник</th><th>Добавлен</th><th>Выгружен</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td class="value" data-value="{{ it.value }}">
+            {{ it.value }}
+            <button type="button" class="copy-btn" data-copy="{{ it.value }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td>
+            {% if it.entry_type == 'ip' %}<span class="badge badge--neutral">IP</span>
+            {% else %}<span class="badge badge--primary">домен</span>{% endif %}
+          </td>
+          <td>
+            {% if it.status == 'new' %}<span class="badge badge--warning">новый</span>
+            {% elif it.status == 'in_rpz' %}<span class="badge badge--neutral">в RPZ</span>
+            {% else %}<span class="badge badge--success">выгружен</span>{% endif %}
+          </td>
+          <td class="muted text-xs">{{ it.document.filename if it.document else '—' }}</td>
+          <td class="muted nowrap text-xs">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td class="muted nowrap text-xs">{{ it.pushed_at.strftime('%d.%m.%Y %H:%M') if it.pushed_at else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="6">
+            <div class="empty">
+              {{ ico.icon('search') }}
+              <div class="empty__title">Ничего не найдено</div>
+              <div class="empty__text">
+                {% if q or status %}Измените условия фильтра.
+                {% else %}Загрузите письмо ФСТЭК, чтобы появились индикаторы.{% endif %}
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
 {% endblock %}

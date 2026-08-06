@@ -1,88 +1,124 @@
 {% extends "base.html" %}
-{% block title %}Настройки SSH{% endblock %}
+{% import "_icons.html" as ico %}
+{% block title %}Настройки{% endblock %}
+{% block subheading %}<div class="topbar__sub">Подключение к DNS-серверу</div>{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
 {% block content %}
-<div class="row justify-content-center">
-  <div class="col-md-7">
-    <div class="card">
-      <div class="card-body">
-        <h4 class="card-title mb-3">Учётная запись для подключения к DNS-серверу</h4>
-        <p class="text-muted">Эти данные используются для чтения файла RPZ-зоны по SSH.
-          Пароль хранится в базе в зашифрованном виде.</p>
-        <form method="post">
-          {{ form.hidden_tag() }}
-          <div class="mb-3">
-            {{ form.name.label(class="form-label") }}
-            {{ form.name(class="form-control") }}
-          </div>
-          <div class="row">
-            <div class="col-8 mb-3">
-              {{ form.host.label(class="form-label") }}
-              {{ form.host(class="form-control") }}
-            </div>
-            <div class="col-4 mb-3">
-              {{ form.port.label(class="form-label") }}
-              {{ form.port(class="form-control") }}
-            </div>
-          </div>
-          <div class="mb-3">
-            {{ form.username.label(class="form-label") }}
-            {{ form.username(class="form-control") }}
-          </div>
-          <div class="mb-3">
-            {{ form.password.label(class="form-label") }}
-            {{ form.password(class="form-control", autocomplete="new-password") }}
-            {% if server %}<div class="form-text">Пароль уже сохранён. Оставьте пустым, чтобы не менять.</div>{% endif %}
-          </div>
-          <div class="mb-3">
-            {{ form.zone_file_path.label(class="form-label") }}
-            {{ form.zone_file_path(class="form-control") }}
-          </div>
-          <div class="mb-3">
-            {{ form.zone_name.label(class="form-label") }}
-            {{ form.zone_name(class="form-control") }}
-            <div class="form-text">Как зона называется в named.conf — используется для
-              <code>named-checkzone</code> и <code>rndc reload</code>.</div>
-          </div>
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Учётная запись DNS-сервера</h2>
+    <p>Используется для чтения зоны и выгрузки блокировок. Пароль хранится в базе в зашифрованном виде.</p>
+  </div>
+</div>
 
-          <hr>
-          <h6>Параметры безопасной выгрузки</h6>
-          <div class="form-check mb-2">
-            {{ form.validate_zone(class="form-check-input") }}
-            {{ form.validate_zone.label(class="form-check-label") }}
-            <div class="form-text">Настоятельно рекомендуется оставить включённым.</div>
-          </div>
-          <div class="form-check mb-2">
-            {{ form.reload_zone(class="form-check-input") }}
-            {{ form.reload_zone.label(class="form-check-label") }}
-          </div>
-          <div class="form-check mb-2">
-            {{ form.sudo_rndc(class="form-check-input") }}
-            {{ form.sudo_rndc.label(class="form-check-label") }}
-            <div class="form-text">
-              Рекомендуемый вариант для непривилегированной УЗ: права на файл зоны
-              выданы через группу, а перезагрузка — одной разрешённой командой.
-              В <code>visudo</code>:
-              <code>rpzbot ALL=(root) NOPASSWD: /usr/sbin/rndc reload {{ form.zone_name.data or 'rpz.block' }}</code>
-            </div>
-          </div>
-          <div class="form-check mb-3">
-            {{ form.use_sudo(class="form-check-input") }}
-            {{ form.use_sudo.label(class="form-check-label") }}
-            <div class="form-text">Нужно, только если у УЗ нет прав на запись в файл
-              зоны. Требует широкого правила sudo (<code>sh -c</code>) — включайте,
-              лишь если права через группу выдать нельзя.</div>
-          </div>
-          <hr>
+<form method="post">
+  {{ form.hidden_tag() }}
 
-          <div class="form-check mb-3">
-            {{ form.is_active(class="form-check-input") }}
-            {{ form.is_active.label(class="form-check-label") }}
-          </div>
-          {{ form.submit(class="btn btn-primary") }}
-          {{ form.test(class="btn btn-outline-secondary") }}
-        </form>
+  <div class="card">
+    <div class="card__header">{{ ico.icon('server') }}<span class="card__title">Подключение по SSH</span></div>
+    <div class="card__body">
+      <div class="field">
+        {{ form.name.label(class="label") }}
+        {{ form.name() }}
+      </div>
+      <div class="row">
+        <div class="field" style="flex:3">
+          {{ form.host.label(class="label") }}
+          {{ form.host(placeholder="10.0.0.5") }}
+        </div>
+        <div class="field" style="flex:1">
+          {{ form.port.label(class="label") }}
+          {{ form.port() }}
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          {{ form.username.label(class="label") }}
+          {{ form.username(placeholder="rpzbot", autocomplete="off") }}
+        </div>
+        <div class="field">
+          {{ form.password.label(class="label") }}
+          {{ form.password(autocomplete="new-password") }}
+          {% if server %}<div class="help">Пароль сохранён. Оставьте пустым, чтобы не менять.</div>{% endif %}
+        </div>
       </div>
     </div>
   </div>
+
+  <div class="card mt-2">
+    <div class="card__header">{{ ico.icon('lock') }}<span class="card__title">RPZ-зона</span></div>
+    <div class="card__body">
+      <div class="field">
+        {{ form.zone_file_path.label(class="label") }}
+        {{ form.zone_file_path() }}
+      </div>
+      <div class="field">
+        {{ form.zone_name.label(class="label") }}
+        {{ form.zone_name() }}
+        <div class="help">Как зона названа в <code>named.conf</code> — используется для
+          <code>named-checkzone</code> и <code>rndc reload</code>.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mt-2">
+    <div class="card__header">{{ ico.icon('shield') }}<span class="card__title">Безопасность выгрузки</span></div>
+    <div class="card__body">
+      <div class="check">
+        {{ form.validate_zone() }}
+        <div>
+          {{ form.validate_zone.label() }}
+          <div class="help">Настоятельно рекомендуется. Без проверки некорректная зона
+            может попасть на боевой сервер.</div>
+        </div>
+      </div>
+      <div class="check">
+        {{ form.reload_zone() }}
+        <div>{{ form.reload_zone.label() }}</div>
+      </div>
+
+      <hr class="divider">
+      <div class="section-title">Права учётной записи</div>
+
+      <div class="check">
+        {{ form.sudo_rndc() }}
+        <div>
+          {{ form.sudo_rndc.label() }}
+          <div class="help">
+            Рекомендуемый вариант для непривилегированной УЗ: права на файл зоны выданы
+            через группу, а перезагрузка разрешена одной строкой в <code>visudo</code>:<br>
+            <code>{{ form.username.data or 'rpzbot' }} ALL=(root) NOPASSWD: /usr/sbin/rndc reload {{ form.zone_name.data or 'rpz.block' }}</code>
+          </div>
+        </div>
+      </div>
+      <div class="check">
+        {{ form.use_sudo() }}
+        <div>
+          {{ form.use_sudo.label() }}
+          <div class="help">Нужно, только если у УЗ нет прав на запись в файл зоны.
+            Требует широкого правила sudo (<code>sh -c</code>) — включайте, лишь если
+            выдать права через группу нельзя.</div>
+        </div>
+      </div>
+      <div class="check">
+        {{ form.is_active() }}
+        <div>{{ form.is_active.label() }}</div>
+      </div>
+    </div>
+    <div class="card__footer">
+      <div class="btn-group">
+        {{ form.submit(class="btn btn--primary") }}
+        {{ form.test(class="btn") }}
+        <span class="text-xs muted">Проверка ничего не меняет на сервере.</span>
+      </div>
+    </div>
+  </div>
+</form>
+
+<div class="note mt-2">
+  <strong>Что проверяет кнопка «Проверить подключение»:</strong> доступность файла зоны,
+  право на запись, наличие <code>named-checkzone</code> и <code>rndc</code>, а также
+  разрешение в sudoers (через <code>sudo -l</code>, без выполнения команды).
 </div>
 {% endblock %}

@@ -1,51 +1,75 @@
 {% extends "base.html" %}
+{% import "_icons.html" as ico %}
 {% block title %}Хеши (IoC){% endblock %}
+{% block subheading %}<div class="topbar__sub">Индикаторы компрометации для SIEM</div>{% endblock %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h3 class="mb-0">Хеши — индикаторы компрометации</h3>
-  <a href="{{ url_for('main.iocs_csv', **request.args) }}" class="btn btn-sm btn-outline-secondary">⬇ CSV</a>
-</div>
-<p class="text-muted">Хеши не блокируются в RPZ — это индикаторы для систем мониторинга (SIEM).</p>
-
-<ul class="nav nav-pills mb-3">
-  <li class="nav-item">
-    <a class="nav-link {% if not htype %}active{% endif %}" href="{{ url_for('main.iocs') }}">Все</a>
-  </li>
-  {% for t, c in counts.items() %}
-  <li class="nav-item">
-    <a class="nav-link {% if htype==t %}active{% endif %}" href="{{ url_for('main.iocs', type=t) }}">
-      {{ t }} <span class="badge bg-light text-dark">{{ c }}</span></a>
-  </li>
-  {% endfor %}
-</ul>
-
-<form method="get" class="row g-2 mb-3">
-  {% if htype %}<input type="hidden" name="type" value="{{ htype }}">{% endif %}
-  <div class="col-auto">
-    <input type="text" name="q" value="{{ q }}" class="form-control form-control-sm"
-           placeholder="Поиск по хешу" style="min-width:280px">
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Хеши — индикаторы компрометации</h2>
+    <p>Хеши не блокируются в RPZ: они предназначены для правил корреляции в системе мониторинга.</p>
   </div>
-  <div class="col-auto"><button class="btn btn-sm btn-outline-secondary">Найти</button></div>
-</form>
-
-<div class="table-responsive">
-  <table class="table table-sm table-striped bg-white">
-    <thead class="table-dark">
-      <tr><th>Хеш</th><th>Тип</th><th>Источник</th><th>Добавлен (UTC)</th></tr>
-    </thead>
-    <tbody>
-      {% for it in items %}
-      <tr>
-        <td><code>{{ it.value }}</code></td>
-        <td><span class="badge bg-info text-dark">{{ it.hash_type }}</span></td>
-        <td class="text-muted">{{ it.document.filename if it.document else '—' }}</td>
-        <td class="text-muted">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4" class="text-center text-muted">Хешей нет.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <a class="btn" href="{{ url_for('main.iocs_csv', **request.args) }}">{{ ico.icon('download') }} Экспорт CSV</a>
 </div>
-{% include "_pagination.html" %}
+
+<div class="tabs">
+  <a class="tab {% if not htype %}is-active{% endif %}" href="{{ url_for('main.iocs') }}">Все</a>
+  {% for t, c in counts.items() %}
+  <a class="tab {% if htype == t %}is-active{% endif %}" href="{{ url_for('main.iocs', type=t) }}">
+    {{ t }} <span class="tab__count">{{ c }}</span></a>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      {% if htype %}<input type="hidden" name="type" value="{{ htype }}">{% endif %}
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по хешу" data-search-focus>
+      </div>
+      <button class="btn btn--sm">Найти</button>
+      {% if q %}<a class="btn btn--ghost btn--sm" href="{{ url_for('main.iocs', type=htype) if htype else url_for('main.iocs') }}">Сбросить</a>{% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="iocTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+    </button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table" id="iocTable">
+      <thead>
+        <tr><th>Хеш</th><th>Тип</th><th>Источник</th><th>Добавлен</th></tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td class="value" data-value="{{ it.value }}">
+            {{ it.value }}
+            <button type="button" class="copy-btn" data-copy="{{ it.value }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td><span class="badge badge--info">{{ it.hash_type }}</span></td>
+          <td class="muted text-xs">{{ it.document.filename if it.document else '—' }}</td>
+          <td class="muted nowrap text-xs">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="4">
+            <div class="empty">
+              {{ ico.icon('hash') }}
+              <div class="empty__title">Хешей нет</div>
+              <div class="empty__text">Они появятся после загрузки письма с индикаторами компрометации.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
 {% endblock %}
