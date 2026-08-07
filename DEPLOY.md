@@ -114,7 +114,26 @@ sudo nginx -t && sudo systemctl reload nginx
 ```bash
 cd /opt/fstec-rpz && git pull && . venv/bin/activate
 pip install -r requirements.txt
+# Резервная копия базы — миграции лучше катать с возможностью откатиться.
+cp instance/rpz.db "instance/rpz.db.$(date +%F-%H%M).bak"
 set -a && . ./.env && set +a && export FLASK_APP=run.py && flask db upgrade
+sudo systemctl restart fstec
+```
+
+Если обновление приносит новые таймауты или параметры запуска (как выпуск с
+сервисом «Угрозы SkyDNS»), обновите и конфиги:
+
+```bash
+sudo cp deploy/fstec.service /etc/systemd/system/fstec.service
+sudo systemctl daemon-reload && sudo systemctl restart fstec
+# и перенесите новые директивы таймаута в конфиг веб-сервера, затем:
+sudo nginx -t && sudo systemctl reload nginx      # или: apachectl configtest && systemctl reload httpd
+```
+
+Откат последней миграции, если что-то пошло не так:
+
+```bash
+set -a && . ./.env && set +a && export FLASK_APP=run.py && flask db downgrade
 sudo systemctl restart fstec
 ```
 

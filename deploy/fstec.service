@@ -23,8 +23,11 @@ WorkingDirectory=/opt/fstec-rpz
 EnvironmentFile=/opt/fstec-rpz/.env
 
 # gunicorn из виртуального окружения проекта.
+# --timeout: поиск конечных хостов в MaxPatrol SIEM выполняется синхронно
+# в запросе, пачка доменов не укладывается в стандартные 30 секунд.
 ExecStart=/opt/fstec-rpz/venv/bin/gunicorn \
     --workers 3 \
+    --timeout 180 \
     --bind 127.0.0.1:8000 \
     --access-logfile - \
     --error-logfile - \
