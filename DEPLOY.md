@@ -1,16 +1,23 @@
-# Развёртывание на сервере (nginx, подпуть /fstec)
+# Развёртывание на сервере (подпуть /soc)
 
-Приложение запускается как отдельный сервис (gunicorn) и отдаётся через
-существующий nginx на подпути:
+Портал запускается как отдельный сервис (gunicorn) и отдаётся через
+существующий веб-сервер на подпути:
 
-    https://soc-dashboards.72to.ru/fstec/
+    https://soc-dashboards.72to.ru/soc/           — главная портала
+    https://soc-dashboards.72to.ru/soc/fstec/     — сервис «РПЗ ФСТЭК»
+    https://soc-dashboards.72to.ru/soc/skydns/    — сервис «Угрозы SkyDNS»
 
-Сайт в корне домена не затрагивается — добавляется только новый `location`.
+Сайт в корне домена и соседние приложения (`/vault/` и т. п.) не затрагиваются —
+добавляется только один новый блок.
 
 ```
-Браузер ──HTTPS──> nginx (soc-dashboards.72to.ru)
-                     ├── /            → существующий сайт (как было)
-                     └── /fstec/      → proxy_pass → gunicorn 127.0.0.1:8000 → Flask
+Браузер ──HTTPS──> httpd/nginx (soc-dashboards.72to.ru)
+                     ├── /          → существующий сайт (как было)
+                     ├── /vault/    → Vaultwarden (как было)
+                     └── /soc/      → proxy → gunicorn 127.0.0.1:8000 → Flask
+                                        ├── /           главная портала
+                                        ├── /fstec/     РПЗ ФСТЭК
+                                        └── /skydns/    Угрозы SkyDNS
 ```
 
 ## 1. Подготовка кода на сервере
@@ -20,7 +27,7 @@ sudo mkdir -p /opt/fstec-rpz
 sudo chown "$USER" /opt/fstec-rpz
 git clone <URL-репозитория> /opt/fstec-rpz
 cd /opt/fstec-rpz
-git checkout claude/adoring-newton-t05n51
+git checkout claude/bold-archimedes-yxxzjk
 
 python3 -m venv venv
 . venv/bin/activate
@@ -58,47 +65,69 @@ SQLite-файл создаётся в `/opt/fstec-rpz/instance/rpz.db`. Ката
 ## 4. Сервис gunicorn (systemd)
 
 ```bash
-sudo cp deploy/fstec.service /etc/systemd/system/fstec.service
+sudo cp deploy/soc-portal.service /etc/systemd/system/soc-portal.service
 # При необходимости поправьте User/Group и WorkingDirectory в файле.
 # Дать пользователю сервиса доступ к каталогу:
 sudo chown -R www-data:www-data /opt/fstec-rpz/instance
 
 sudo systemctl daemon-reload
-sudo systemctl enable --now fstec
-sudo systemctl status fstec          # должно быть active (running)
+sudo systemctl enable --now soc-portal
+sudo systemctl status soc-portal     # должно быть active (running)
 curl -s http://127.0.0.1:8000/login | head   # проверка, что gunicorn отвечает
 ```
 
 ## 5. Конфигурация веб-сервера
 
-> **Apache (httpd):** используйте `deploy/apache-fstec.conf` — вставьте блоки в
-> существующий `<VirtualHost *:443>`, затем `apachectl configtest && systemctl reload httpd`.
-> Нужны модули mod_proxy, mod_proxy_http, mod_headers, mod_rewrite. Остальные шаги
-> (gunicorn, .env, SELinux) одинаковы. Ниже — вариант для nginx.
+Нужен один блок в существующем HTTPS-хосте. Корневой сайт и соседние приложения
+не затрагиваются.
 
-Откройте конфиг существующего сайта (обычно
-`/etc/nginx/sites-available/soc-dashboards.72to.ru` или файл в `conf.d/`),
-найдите блок `server { ... }` для HTTPS (порт 443) и вставьте внутрь
-содержимое `deploy/nginx-fstec.conf`:
+Определить, какой веб-сервер работает: `sudo ss -ltnp | grep ':443'`.
+
+### Apache (httpd / httpd2)
+
+Готовый фрагмент — `deploy/apache-soc.conf`. Вставьте его внутрь существующего
+`<VirtualHost *:443>`:
+
+```apache
+    # /soc без слэша -> /soc/
+    RedirectMatch ^/soc$ /soc/
+
+    <Location /soc/>
+        Require all granted
+        ProxyPass        http://127.0.0.1:8000/ timeout=180
+        ProxyPassReverse http://127.0.0.1:8000/
+        RequestHeader set X-Real-IP          %{REMOTE_ADDR}s
+        RequestHeader set X-Forwarded-Proto  "https"
+        RequestHeader set X-Forwarded-Port   "443"
+        RequestHeader set X-Forwarded-Prefix "/soc"
+    </Location>
+```
+
+Нужны модули `mod_proxy`, `mod_proxy_http`, `mod_headers`, `mod_rewrite`.
+Применить:
+
+```bash
+sudo apachectl configtest && sudo systemctl reload httpd2   # или httpd / apache2
+```
+
+### nginx
+
+Готовый фрагмент — `deploy/nginx-soc.conf`. Вставьте внутрь блока
+`server { listen 443 ssl; ... }`:
 
 ```nginx
-server {
-    listen 443 ssl;
-    server_name soc-dashboards.72to.ru;
-    # ... существующие ssl_certificate и корневой сайт ...
-
-    # >>> добавить блоки из deploy/nginx-fstec.conf <<<
-    location = /fstec { return 301 /fstec/; }
-    location /fstec/ {
+    location = /soc { return 301 /soc/; }
+    location /soc/ {
         proxy_pass http://127.0.0.1:8000/;
         proxy_set_header Host              $host;
         proxy_set_header X-Real-IP         $remote_addr;
         proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Prefix /fstec;
+        proxy_set_header X-Forwarded-Prefix /soc;
         client_max_body_size 10m;
+        proxy_read_timeout 180s;
+        proxy_send_timeout 180s;
     }
-}
 ```
 
 Применить:
@@ -107,7 +136,8 @@ server {
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-Откройте `https://soc-dashboards.72to.ru/fstec/` — должна открыться страница входа.
+Откройте `https://soc-dashboards.72to.ru/soc/` — должна открыться страница входа,
+а после входа — главная портала со списком сервисов.
 
 ## 6. Обновление приложения
 
@@ -117,15 +147,15 @@ pip install -r requirements.txt
 # Резервная копия базы — миграции лучше катать с возможностью откатиться.
 cp instance/rpz.db "instance/rpz.db.$(date +%F-%H%M).bak"
 set -a && . ./.env && set +a && export FLASK_APP=run.py && flask db upgrade
-sudo systemctl restart fstec
+sudo systemctl restart soc-portal
 ```
 
 Если обновление приносит новые таймауты или параметры запуска (как выпуск с
 сервисом «Угрозы SkyDNS»), обновите и конфиги:
 
 ```bash
-sudo cp deploy/fstec.service /etc/systemd/system/fstec.service
-sudo systemctl daemon-reload && sudo systemctl restart fstec
+sudo cp deploy/soc-portal.service /etc/systemd/system/soc-portal.service
+sudo systemctl daemon-reload && sudo systemctl restart soc-portal
 # и перенесите новые директивы таймаута в конфиг веб-сервера, затем:
 sudo nginx -t && sudo systemctl reload nginx      # или: apachectl configtest && systemctl reload httpd
 ```
@@ -134,16 +164,47 @@ sudo nginx -t && sudo systemctl reload nginx      # или: apachectl configtest
 
 ```bash
 set -a && . ./.env && set +a && export FLASK_APP=run.py && flask db downgrade
-sudo systemctl restart fstec
+sudo systemctl restart soc-portal
 ```
+
+## 7. Переезд с прежней схемы (/fstec, служба fstec)
+
+Если сервис уже стоял как «РПЗ ФСТЭК» на `/fstec/`, переход на портал делается так.
+База, файлы писем и `.env` не трогаются — каталог остаётся прежним.
+
+```bash
+cd /opt/fstec-rpz
+git fetch origin claude/bold-archimedes-yxxzjk
+git checkout claude/bold-archimedes-yxxzjk
+. venv/bin/activate
+
+cp instance/rpz.db "instance/rpz.db.$(date +%F-%H%M).bak"
+set -a && . ./.env && set +a && export FLASK_APP=run.py
+flask db upgrade
+
+# Старая служба заменяется новой (имя больше не отражало содержимое).
+sudo systemctl disable --now fstec
+sudo rm -f /etc/systemd/system/fstec.service
+sudo cp deploy/soc-portal.service /etc/systemd/system/soc-portal.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now soc-portal
+```
+
+Затем в конфиге веб-сервера замените блок `/fstec/` на блок `/soc/` из раздела 5
+(меняются сам путь, `X-Forwarded-Prefix` и добавляется таймаут) и перезагрузите
+веб-сервер.
+
+Новый адрес: `https://soc-dashboards.72to.ru/soc/`. Старый `/fstec/` перестаёт
+работать — разошлите новую ссылку коллегам.
 
 ## Примечания
 
 - **Почему подпуть работает корректно:** при `BEHIND_PROXY=1` приложение через
   `ProxyFix` читает заголовки `X-Forwarded-Proto/Host/Prefix`, поэтому `url_for`,
-  редиректы и cookie сессии формируются с префиксом `/fstec` и схемой `https`.
+  редиректы и cookie сессии формируются с префиксом `/soc` и схемой `https`.
 - **Как определить веб-сервер**, если не уверены: `sudo ss -ltnp | grep ':443'`
-  или `systemctl status nginx`.
+  покажет процесс (`nginx`, `httpd`, `httpd2` или `apache2`). Найти, где описан
+  подпуть: `sudo grep -rn "/soc/" /etc/nginx/ /etc/httpd*/ /etc/apache2/`.
 - **Доступ к DNS-серверу:** SSH-подключение к BIND настраивается уже внутри
   приложения (раздел «Настройки»), на этапе развёртывания ничего не требуется.
 - **Сервис «Угрозы SkyDNS»** появляется вкладкой в боковой панели после
@@ -156,5 +217,5 @@ sudo systemctl restart fstec
   Без них сервис остаётся рабочим в режиме импорта CSV.
 - **Таймауты при поиске в SIEM:** запрос выполняется синхронно, пакетная
   проверка ограничена 25 доменами. Если SIEM отвечает медленно, поднимите
-  `--timeout` у gunicorn в `deploy/fstec.service` и
+  `--timeout` у gunicorn в `deploy/soc-portal.service` и
   `proxy_read_timeout` в конфиге веб-сервера.

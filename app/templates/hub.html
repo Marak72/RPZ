@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Главная{% endblock %}
+{% block subheading %}<div class="topbar__sub">Сервисы отдела информационной безопасности</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Портал ИБ</h2>
+    <p>Выберите сервис. Учётная запись, роли и оформление общие для всех разделов.</p>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('shield') }}
+      <span class="card__title">РПЗ ФСТЭК</span>
+      <span class="badge badge--neutral" style="margin-left:auto">/fstec/</span>
+    </div>
+    <div class="card__body">
+      <p class="text-sm muted">
+        Индикаторы из писем ФСТЭК и блокировка доменов на DNS-сервере BIND
+        через RPZ-зону: разбор писем, проверка в VirusTotal, безопасная выгрузка
+        в боевую зону с резервной копией и откатом.
+      </p>
+
+      <div class="grid grid--stats mt-2">
+        <a class="stat stat--primary" href="{{ url_for('main.rpz_view') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('lock') }}</span>
+            <span class="stat__label">Заблокировано</span>
+          </div>
+          <div class="stat__value">{{ fstec.blocked }}</div>
+          <div class="stat__hint">записей в зоне</div>
+        </a>
+        <a class="stat {{ 'stat--warning' if fstec.pending else 'stat--success' }}"
+           href="{{ url_for('main.push_view') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('upload') }}</span>
+            <span class="stat__label">Ждут выгрузки</span>
+          </div>
+          <div class="stat__value">{{ fstec.pending }}</div>
+          <div class="stat__hint">новых доменов</div>
+        </a>
+        <a class="stat stat--info" href="{{ url_for('main.documents') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('inbox') }}</span>
+            <span class="stat__label">Письма</span>
+          </div>
+          <div class="stat__value">{{ fstec.documents }}</div>
+          <div class="stat__hint">
+            {% if fstec.updated %}зона от {{ fstec.updated.strftime('%d.%m.%Y') }}
+            {% else %}зона не считывалась{% endif %}
+          </div>
+        </a>
+      </div>
+    </div>
+    <div class="card__footer">
+      <a class="btn btn--primary" href="{{ url_for('main.dashboard') }}">
+        {{ ico.icon('grid') }} Открыть сервис
+      </a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('activity') }}
+      <span class="card__title">Угрозы SkyDNS</span>
+      <span class="badge badge--neutral" style="margin-left:auto">/skydns/</span>
+    </div>
+    <div class="card__body">
+      <p class="text-sm muted">
+        Обращения на вредоносные ресурсы из статистики SkyDNS и поиск конечных
+        хостов в MaxPatrol SIEM: SkyDNS видит только шлюз, SIEM — кто именно за
+        ним ходил. Разобранный домен уходит в блокировку RPZ.
+      </p>
+
+      <div class="grid grid--stats mt-2">
+        <a class="stat stat--danger" href="{{ url_for('skydns.domains') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('globe') }}</span>
+            <span class="stat__label">Опасных доменов</span>
+          </div>
+          <div class="stat__value">{{ skydns.threats }}</div>
+          <div class="stat__hint">из них новых: {{ skydns.new }}</div>
+        </a>
+        <a class="stat stat--info" href="{{ url_for('skydns.hosts') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('server') }}</span>
+            <span class="stat__label">Конечных хостов</span>
+          </div>
+          <div class="stat__value">{{ skydns.hosts }}</div>
+          <div class="stat__hint">найдено в SIEM</div>
+        </a>
+        <a class="stat {{ 'stat--warning' if skydns.unchecked else 'stat--success' }}"
+           href="{{ url_for('skydns.domains') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('search') }}</span>
+            <span class="stat__label">Не проверено</span>
+          </div>
+          <div class="stat__value">{{ skydns.unchecked }}</div>
+          <div class="stat__hint">доменов без запроса в SIEM</div>
+        </a>
+      </div>
+    </div>
+    <div class="card__footer">
+      <a class="btn btn--primary" href="{{ url_for('skydns.dashboard') }}">
+        {{ ico.icon('grid') }} Открыть сервис
+      </a>
+    </div>
+  </div>
+</div>
+{% endblock %}

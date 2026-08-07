@@ -1,13 +1,13 @@
-# systemd-юнит для запуска приложения через gunicorn.
-# Скопировать в /etc/systemd/system/fstec.service и поправить пути/пользователя.
+# systemd-юнит для запуска портала ИБ через gunicorn.
+# Скопировать в /etc/systemd/system/soc-portal.service и поправить пути/пользователя.
 #
-#   sudo cp deploy/fstec.service /etc/systemd/system/fstec.service
+#   sudo cp deploy/soc-portal.service /etc/systemd/system/soc-portal.service
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now fstec
-#   sudo systemctl status fstec
+#   sudo systemctl enable --now soc-portal
+#   sudo systemctl status soc-portal
 
 [Unit]
-Description=FSTEC RPZ blocklist web app (gunicorn)
+Description=Portal IB: FSTEC RPZ and SkyDNS threats (gunicorn)
 After=network.target
 
 [Service]

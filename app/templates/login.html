@@ -4,7 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Вход — РПЗ ФСТЭК</title>
+  <title>Вход — Портал ИБ</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><text y='20' font-size='20'>🛡️</text></svg>">
 </head>
@@ -14,9 +14,9 @@
 <div class="login-card">
   <div class="login-brand">
     {{ ico.icon('shield', 'icon') }}
-    <h1>РПЗ ФСТЭК</h1>
+    <h1>Портал ИБ</h1>
   </div>
-  <p class="login-sub">Учёт и блокировка вредоносных доменов</p>
+  <p class="login-sub">Сервисы отдела информационной безопасности</p>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}

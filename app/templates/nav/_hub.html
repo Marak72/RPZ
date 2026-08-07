@@ -1,0 +1,24 @@
+{# На главной портала своей боковой навигации нет: сервисы выбираются
+   переключателем выше. Здесь — только быстрые ссылки внутрь сервисов. #}
+<div class="nav-group">
+  <div class="nav-group__title">Быстрый переход</div>
+  <a class="nav-link" href="{{ url_for('main.push_view') }}">
+    {{ ico.icon('upload') }} Выгрузка в RPZ
+    {% if nav_counts.pending %}
+    <span class="nav-link__count nav-link__count--alert">{{ nav_counts.pending }}</span>
+    {% endif %}
+  </a>
+  <a class="nav-link" href="{{ url_for('skydns.domains') }}">
+    {{ ico.icon('globe') }} Опасные домены
+    <span class="nav-link__count">{{ skydns_counts.threats }}</span>
+  </a>
+  <a class="nav-link" href="{{ url_for('skydns.hosts') }}">
+    {{ ico.icon('server') }} Конечные хосты
+    <span class="nav-link__count">{{ skydns_counts.hosts }}</span>
+  </a>
+  {% if current_user.is_operator %}
+  <a class="nav-link" href="{{ url_for('main.settings') }}">
+    {{ ico.icon('settings') }} Настройки
+  </a>
+  {% endif %}
+</div>

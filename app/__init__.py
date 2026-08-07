@@ -32,10 +32,12 @@ def create_app(config_class: type = Config) -> Flask:
     from . import models  # noqa: F401
 
     from .auth.routes import auth_bp
+    from .hub.routes import hub_bp
     from .main.routes import main_bp
     from .skydns.routes import skydns_bp
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(hub_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(skydns_bp)
 
@@ -49,11 +51,12 @@ def _register_portal_context(app: Flask) -> None:
     """Отдать шаблонам список сервисов портала и активную вкладку."""
     from flask import request
 
-    from .portal import SERVICES, service_by_blueprint
+    from .portal import HUB, SERVICES, service_by_blueprint
 
     @app.context_processor
     def inject_services():
         return {
+            "hub": HUB,
             "services": SERVICES,
             "active_service": service_by_blueprint(request.blueprint),
         }

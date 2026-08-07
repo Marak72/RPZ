@@ -3,8 +3,13 @@
 Портал — это одна точка входа с общими пользователями, темой и версткой,
 внутри которой живут независимые сервисы (вкладки верхнего уровня):
 
-  * ``fstec``  — блокировка доменов из писем ФСТЭК через RPZ-зону BIND;
-  * ``skydns`` — угрозы из статистики SkyDNS и поиск конечных хостов в SIEM.
+  * ``fstec``  (``/fstec/``)  — блокировка доменов из писем ФСТЭК через RPZ BIND;
+  * ``skydns`` (``/skydns/``) — угрозы из статистики SkyDNS и поиск конечных
+    хостов в MaxPatrol SIEM.
+
+В корне портала (``/``) — главная страница со списком сервисов, blueprint
+``hub``. Снаружи всё это отдаётся на подпути ``/soc/``, то есть сервисы
+открываются как ``/soc/fstec/`` и ``/soc/skydns/``.
 
 Каждый сервис — отдельный blueprint со своим набором страниц. Здесь описано
 только то, что нужно общей вёрстке: заголовок вкладки, иконка, точка входа и
@@ -47,7 +52,19 @@ SERVICES: tuple[Service, ...] = (
     ),
 )
 
-DEFAULT_SERVICE = SERVICES[0]
+# Главная портала — не сервис: у неё нет своей боковой навигации, поэтому она
+# описана отдельно и в переключателе стоит над списком сервисов.
+HUB = Service(
+    id="hub",
+    title="Главная",
+    subtitle="все сервисы отдела",
+    icon="grid",
+    endpoint="hub.index",
+    blueprint="hub",
+    nav_template="nav/_hub.html",
+)
+
+DEFAULT_SERVICE = HUB
 
 
 def service_by_blueprint(blueprint: str | None) -> Service:
@@ -55,4 +72,4 @@ def service_by_blueprint(blueprint: str | None) -> Service:
     for service in SERVICES:
         if service.blueprint == blueprint:
             return service
-    return DEFAULT_SERVICE
+    return HUB

@@ -88,7 +88,9 @@ from .forms import (
     UploadForm,
 )
 
-main_bp = Blueprint("main", __name__)
+# Сервис живёт на своём подпути: снаружи это /soc/fstec/, в корне портала —
+# главная страница со списком сервисов (blueprint hub).
+main_bp = Blueprint("main", __name__, url_prefix="/fstec")
 
 # Типы записей, которые являются хешами (а не адресами для блокировки).
 HASH_TYPES = ("sha256", "sha1", "md5")

@@ -13,13 +13,22 @@
 
 <div class="app">
   <aside class="sidebar">
-    <a class="sidebar__brand" href="{{ url_for(active_service.endpoint) }}">
+    <a class="sidebar__brand" href="{{ url_for(hub.endpoint) }}">
       {{ ico.icon('shield', 'icon icon-lg') }}
       <span>Портал ИБ<small>{{ active_service.title|lower }}</small></span>
     </a>
 
     {# Переключатель сервисов: верхний уровень навигации портала. #}
     <div class="switcher">
+      <a class="switcher__item {% if active_service.id == 'hub' %}is-active{% endif %}"
+         href="{{ url_for(hub.endpoint) }}">
+        {{ ico.icon(hub.icon) }}
+        <span class="switcher__text">
+          {{ hub.title }}
+          <small>{{ hub.subtitle }}</small>
+        </span>
+      </a>
+
       <div class="switcher__title">Сервисы</div>
       {% for svc in services %}
       <a class="switcher__item {% if svc.id == active_service.id %}is-active{% endif %}"
