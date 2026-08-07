@@ -365,9 +365,14 @@ def upload():
     form = UploadForm()
     if form.validate_on_submit():
         file = form.document.data
+        data = file.read()
+        extracted = []
         try:
-            data = file.read()
             extracted = doc_parser.extract_from_file(file.filename, data)
+        except doc_parser.MissingDependency as exc:
+            # Библиотеки для разбора нет — письмо всё равно сохраняем,
+            # индикаторы можно будет добавить вручную.
+            flash(str(exc), "warning")
         except ValueError as exc:
             flash(str(exc), "danger")
             return redirect(url_for("main.upload"))
@@ -375,10 +380,9 @@ def upload():
             current_app.logger.exception("Ошибка разбора письма")
             flash(
                 f"Не удалось разобрать файл «{file.filename}»: {exc}. "
-                "Убедитесь, что файл не повреждён.",
-                "danger",
+                "Письмо можно сохранить и добавить индикаторы вручную.",
+                "warning",
             )
-            return redirect(url_for("main.upload"))
 
         # Сохраняем сам файл письма, чтобы его можно было открыть позже.
         try:

@@ -1,0 +1,18 @@
+# Необязательные зависимости.
+#
+# pypdf нужен ТОЛЬКО для автоматического распознавания индикаторов из PDF.
+# Без него приложение полностью работоспособно: письма в PDF сохраняются,
+# открываются в браузере, индикаторы к ним можно добавить вручную.
+#
+# Установка при доступном PyPI:
+#     pip install -r requirements-optional.txt
+#
+# Если PyPI закрыт, но доступен GitHub:
+#     pip install "pypdf @ git+https://github.com/py-pdf/pypdf@4.3.1"
+#
+# Либо из репозитория дистрибутива (ALT Linux):
+#     apt-get install python3-module-pypdf
+# и пересоздать окружение с доступом к системным пакетам:
+#     python3 -m venv --system-site-packages venv
+
+pypdf==4.3.1

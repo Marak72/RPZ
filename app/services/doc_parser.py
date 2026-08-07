@@ -252,8 +252,18 @@ def _text_from_odt(data: bytes) -> str:
     return "\n".join(parts)
 
 
+class MissingDependency(ValueError):
+    """Не установлена библиотека, нужная для разбора этого формата."""
+
+
 def _text_from_pdf(data: bytes) -> str:
-    from pypdf import PdfReader
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:  # pypdf не обязателен: без него PDF только хранится
+        raise MissingDependency(
+            "Для распознавания индикаторов из PDF нужна библиотека pypdf "
+            "(pip install pypdf). Само письмо при этом сохраняется и открывается."
+        ) from exc
 
     reader = PdfReader(io.BytesIO(data))
     parts: list[str] = []

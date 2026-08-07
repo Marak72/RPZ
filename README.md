@@ -110,6 +110,18 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+Необязательно — распознавание индикаторов **из PDF** (см. `requirements-optional.txt`):
+
+```bash
+pip install -r requirements-optional.txt
+# если PyPI закрыт, но доступен GitHub:
+pip install "pypdf @ git+https://github.com/py-pdf/pypdf@4.3.1"
+```
+
+Без `pypdf` приложение работает полностью: письма в PDF сохраняются, открываются
+в браузере и привязываются к индикаторам — не работает только автоматическое
+извлечение индикаторов из PDF (их можно добавить вручную).
+
 ### Переменные окружения
 
 ```bash
