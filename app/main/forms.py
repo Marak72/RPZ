@@ -2,24 +2,48 @@ from flask_wtf import FlaskForm
 from flask_wtf.file import FileAllowed, FileField, FileRequired
 from wtforms import (
     BooleanField,
+    DateField,
     IntegerField,
     PasswordField,
     StringField,
     SubmitField,
+    TextAreaField,
 )
 from wtforms.validators import DataRequired, NumberRange, Optional
 
 
 class UploadForm(FlaskForm):
     document = FileField(
-        "Письмо ФСТЭК (.docx / .odt)",
+        "Файл письма (.docx / .odt / .pdf)",
         validators=[
             FileRequired(message="Выберите файл."),
-            FileAllowed(["docx", "odt"], "Только файлы .docx и .odt"),
+            FileAllowed(["docx", "odt", "pdf"], "Только файлы .docx, .odt и .pdf"),
         ],
     )
-    notes = StringField("Примечание (номер/дата письма)", validators=[Optional()])
+    pdf = FileField(
+        "PDF письма для просмотра (необязательно)",
+        validators=[Optional(), FileAllowed(["pdf"], "Только файл .pdf")],
+    )
+    letter_number = StringField("Номер письма", validators=[Optional()])
+    letter_date = DateField("Дата письма", validators=[Optional()])
+    notes = StringField("Примечание", validators=[Optional()])
     submit = SubmitField("Загрузить и распознать")
+
+
+class ManualAddForm(FlaskForm):
+    """Ручное добавление доменов или IP-адресов (по одному в строке)."""
+
+    values = TextAreaField(
+        "Домены или IP-адреса",
+        validators=[DataRequired(message="Введите хотя бы одно значение.")],
+    )
+    notes = StringField("Примечание", validators=[Optional()])
+    submit = SubmitField("Добавить")
+
+
+class NotesForm(FlaskForm):
+    notes = TextAreaField("Заметка", validators=[Optional()])
+    submit = SubmitField("Сохранить заметку")
 
 
 class SshServerForm(FlaskForm):
@@ -55,3 +79,16 @@ class SshServerForm(FlaskForm):
     is_active = BooleanField("Активная учётная запись", default=True)
     submit = SubmitField("Сохранить")
     test = SubmitField("Проверить подключение")
+
+
+class AppSettingsForm(FlaskForm):
+    """Общие настройки: ключ VirusTotal и защищённые домены."""
+
+    vt_api_key = PasswordField(
+        "Ключ API VirusTotal (оставьте пустым, чтобы не менять)",
+        validators=[Optional()],
+    )
+    protected_domains = TextAreaField(
+        "Защищённые домены (по одному в строке)", validators=[Optional()]
+    )
+    submit_app = SubmitField("Сохранить")

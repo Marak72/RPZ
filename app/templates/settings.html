@@ -121,4 +121,31 @@
   право на запись, наличие <code>named-checkzone</code> и <code>rndc</code>, а также
   разрешение в sudoers (через <code>sudo -l</code>, без выполнения команды).
 </div>
+
+<form method="post" class="mt-2">
+  {{ app_form.hidden_tag() }}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('shield') }}<span class="card__title">Приложение</span></div>
+    <div class="card__body">
+      <div class="field">
+        {{ app_form.vt_api_key.label(class="label") }}
+        {{ app_form.vt_api_key(autocomplete="new-password") }}
+        <div class="help">
+          {% if vt_configured %}Ключ сохранён. Оставьте пустым, чтобы не менять.
+          {% else %}Ключ пока не задан — проверка индикаторов недоступна.{% endif %}
+          Бесплатный ключ выдаётся в личном кабинете VirusTotal: 4 запроса в минуту, 500 в сутки.
+        </div>
+      </div>
+      <div class="field">
+        {{ app_form.protected_domains.label(class="label") }}
+        {{ app_form.protected_domains(rows=6, placeholder="gosuslugi.ru&#10;mos.ru&#10;72to.ru") }}
+        <div class="help">
+          Страховка от ошибки: эти домены приложение <strong>никогда</strong> не выгрузит
+          в блокировку, даже если их выбрали. По одному в строке.
+        </div>
+      </div>
+      {{ app_form.submit_app(class="btn btn--primary") }}
+    </div>
+  </div>
+</form>
 {% endblock %}

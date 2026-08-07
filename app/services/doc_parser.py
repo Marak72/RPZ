@@ -252,15 +252,37 @@ def _text_from_odt(data: bytes) -> str:
     return "\n".join(parts)
 
 
-def extract_from_file(filename: str, data: bytes) -> list[ExtractedEntry]:
-    """Извлечь индикаторы из загруженного файла по его расширению."""
+def _text_from_pdf(data: bytes) -> str:
+    from pypdf import PdfReader
+
+    reader = PdfReader(io.BytesIO(data))
+    parts: list[str] = []
+    for page in reader.pages:
+        try:
+            parts.append(page.extract_text() or "")
+        except Exception:  # noqa: BLE001 — повреждённая страница не должна ронять разбор
+            continue
+    text = "\n".join(parts)
+    # В PDF индикаторы часто переносятся: «example[.]co\nm». Склеиваем переносы
+    # внутри слова, но сохраняем разбиение на строки-индикаторы.
+    text = re.sub(r"-\n(?=\w)", "", text)
+    return text
+
+
+def extract_text_from_file(filename: str, data: bytes) -> str:
+    """Достать текст из письма (.docx / .odt / .pdf)."""
     lower = (filename or "").lower()
     if not data:
         raise ValueError("Файл пустой.")
     if lower.endswith(".docx"):
-        text = _text_from_docx(data)
-    elif lower.endswith(".odt"):
-        text = _text_from_odt(data)
-    else:
-        raise ValueError("Поддерживаются только файлы .docx и .odt")
-    return extract(text)
+        return _text_from_docx(data)
+    if lower.endswith(".odt"):
+        return _text_from_odt(data)
+    if lower.endswith(".pdf"):
+        return _text_from_pdf(data)
+    raise ValueError("Поддерживаются файлы .docx, .odt и .pdf")
+
+
+def extract_from_file(filename: str, data: bytes) -> list[ExtractedEntry]:
+    """Извлечь индикаторы из загруженного файла по его расширению."""
+    return extract(extract_text_from_file(filename, data))

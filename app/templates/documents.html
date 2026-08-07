@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Письма ФСТЭК{% endblock %}
+{% block subheading %}<div class="topbar__sub">Архив писем и связанных индикаторов</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Письма ФСТЭК</h2>
+    <p>Каждое письмо хранится целиком — его можно открыть и увидеть, откуда взялся любой индикатор.</p>
+  </div>
+  {% if current_user.is_operator %}
+  <a class="btn btn--primary" href="{{ url_for('main.upload') }}">{{ ico.icon('upload') }} Загрузить письмо</a>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по имени, номеру, примечанию" data-search-focus>
+      </div>
+      <button class="btn btn--sm">Найти</button>
+      {% if q %}<a class="btn btn--ghost btn--sm" href="{{ url_for('main.documents') }}">Сбросить</a>{% endif %}
+    </form>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Письмо</th><th>Номер / дата</th><th>Индикаторы</th>
+          <th>Загружено</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in items %}
+        {% set st = stats[d.id] %}
+        <tr>
+          <td>
+            <a href="{{ url_for('main.document_view', doc_id=d.id) }}"><strong>{{ d.filename }}</strong></a>
+            {% if d.viewable_pdf %}<span class="badge badge--danger">PDF</span>{% endif %}
+            {% if d.notes %}<div class="text-xs muted">{{ d.notes }}</div>{% endif %}
+          </td>
+          <td class="text-xs">
+            {% if d.letter_number %}{{ d.letter_number }}{% else %}<span class="muted">—</span>{% endif %}
+            {% if d.letter_date %}<div class="muted">{{ d.letter_date.strftime('%d.%m.%Y') }}</div>{% endif %}
+          </td>
+          <td>
+            <div class="inline">
+              {% if st.domains %}<span class="badge badge--primary">{{ st.domains }} дом.</span>{% endif %}
+              {% if st.ips %}<span class="badge badge--neutral">{{ st.ips }} IP</span>{% endif %}
+              {% if st.urls %}<span class="badge badge--info">{{ st.urls }} URL</span>{% endif %}
+              {% if st.hashes %}<span class="badge badge--neutral">{{ st.hashes }} хеш.</span>{% endif %}
+              {% if not (st.domains or st.ips or st.urls or st.hashes) %}<span class="muted text-xs">нет</span>{% endif %}
+            </div>
+          </td>
+          <td class="muted nowrap text-xs">
+            {{ d.uploaded_at.strftime('%d.%m.%Y %H:%M') }}
+            {% if d.user %}<div>{{ d.user.username }}</div>{% endif %}
+          </td>
+          <td class="num nowrap">
+            {% if d.viewable_pdf %}
+            <a class="btn btn--sm" href="{{ url_for('main.document_file', doc_id=d.id) }}" target="_blank"
+               title="Открыть письмо">{{ ico.icon('eye', 'icon icon-sm') }}</a>
+            {% endif %}
+            <a class="btn btn--sm" href="{{ url_for('main.document_view', doc_id=d.id) }}">Открыть</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="5">
+            <div class="empty">
+              {{ ico.icon('inbox') }}
+              <div class="empty__title">Писем нет</div>
+              <div class="empty__text">Загрузите письмо ФСТЭК в формате .docx, .odt или .pdf.</div>
+              {% if current_user.is_operator %}
+              <a class="btn btn--primary btn--sm" href="{{ url_for('main.upload') }}">{{ ico.icon('upload') }} Загрузить</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

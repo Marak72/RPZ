@@ -15,6 +15,15 @@
   </div>
   <div class="btn-group">
     <a class="btn" href="{{ url_for('main.candidates_csv', **request.args) }}">{{ ico.icon('download') }} Экспорт CSV</a>
+    {% if current_user.is_operator %}
+    <a class="btn" href="{{ url_for('main.manual_add') }}">{{ ico.icon('play') }} Добавить вручную</a>
+    <form method="post" action="{{ url_for('main.vt_check_batch') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn" title="Проверить непроверенные индикаторы в VirusTotal">
+        {{ ico.icon('shield') }} Проверить в VT
+      </button>
+    </form>
+    {% endif %}
     {% if etype != 'ip' %}
     <a class="btn btn--primary" href="{{ url_for('main.push_view') }}">{{ ico.icon('upload') }} К выгрузке</a>
     {% endif %}
@@ -61,15 +70,15 @@
     <table class="table" id="candTable">
       <thead>
         <tr>
-          <th>Значение</th><th>Тип</th><th>Статус</th>
-          <th>Источник</th><th>Добавлен</th><th>Выгружен</th>
+          <th>Значение</th><th>Тип</th><th>Статус</th><th>VT</th>
+          <th>Источник</th><th>Добавлен</th>
         </tr>
       </thead>
       <tbody>
         {% for it in items %}
         <tr>
           <td class="value" data-value="{{ it.value }}">
-            {{ it.value }}
+            <a href="{{ url_for('main.object_view', entry_id=it.id) }}">{{ it.value }}</a>
             <button type="button" class="copy-btn" data-copy="{{ it.value }}" title="Скопировать">
               {{ ico.icon('copy', 'icon icon-sm') }}
             </button>
@@ -83,9 +92,13 @@
             {% elif it.status == 'in_rpz' %}<span class="badge badge--neutral">в RPZ</span>
             {% else %}<span class="badge badge--success">выгружен</span>{% endif %}
           </td>
-          <td class="muted text-xs">{{ it.document.filename if it.document else '—' }}</td>
+          <td>{% include "_vt_badge.html" %}</td>
+          <td class="muted text-xs">
+            {% if it.source == 'manual' %}<span class="badge badge--neutral">вручную</span>
+            {% elif it.document %}<a href="{{ url_for('main.document_view', doc_id=it.document.id) }}">{{ it.document.filename }}</a>
+            {% else %}—{% endif %}
+          </td>
           <td class="muted nowrap text-xs">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
-          <td class="muted nowrap text-xs">{{ it.pushed_at.strftime('%d.%m.%Y %H:%M') if it.pushed_at else '—' }}</td>
         </tr>
         {% else %}
         <tr data-empty>

@@ -1,0 +1,207 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ entry.value }}{% endblock %}
+{% block subheading %}<div class="topbar__sub">Карточка индикатора</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2 class="mono">{{ entry.value }}
+      <button type="button" class="copy-btn" style="opacity:.6" data-copy="{{ entry.value }}"
+              title="Скопировать">{{ ico.icon('copy') }}</button>
+    </h2>
+    <p>
+      {% if entry.entry_type == 'ip' %}IP-адрес{% else %}Домен{% endif %} ·
+      добавлен {{ entry.created_at.strftime('%d.%m.%Y %H:%M') }} ·
+      источник: {{ 'добавлен вручную' if entry.source == 'manual' else 'письмо ФСТЭК' }}
+    </p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('main.candidates', type=entry.entry_type) }}">← К списку</a>
+    {% if entry.entry_type == 'domain' %}
+    <a class="btn btn--primary" href="{{ url_for('main.push_view') }}">{{ ico.icon('upload') }} К выгрузке</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if protected %}
+<div class="alert alert--warning">{{ ico.icon('alert') }}
+  <div class="alert__text">Домен в списке защищённых — приложение никогда не выгрузит его в блокировку.</div>
+</div>
+{% endif %}
+
+<div class="grid grid--2">
+  {# --- Состояние --- #}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('info') }}<span class="card__title">Состояние</span></div>
+    <div class="card__body">
+      <dl class="kv">
+        <dt>Тип</dt>
+        <dd>{% if entry.entry_type == 'ip' %}<span class="badge badge--neutral">IP-адрес</span>
+            {% else %}<span class="badge badge--primary">домен</span>{% endif %}</dd>
+        <dt>Статус</dt>
+        <dd>
+          {% if entry.status == 'new' %}<span class="badge badge--warning">не заблокирован</span>
+          {% elif entry.status == 'in_rpz' %}<span class="badge badge--neutral">присутствует в RPZ</span>
+          {% else %}<span class="badge badge--success">выгружен нами</span>{% endif %}
+        </dd>
+        <dt>В зоне RPZ</dt>
+        <dd>{% if in_rpz %}<span class="badge badge--success">{{ ico.icon('check','icon icon-sm') }} да</span>
+            {% elif entry.entry_type == 'ip' %}<span class="text-xs muted">неприменимо — IP блокируется на МЭ</span>
+            {% else %}<span class="badge badge--warning">нет</span>{% endif %}</dd>
+        <dt>Выгружен</dt>
+        <dd>{{ entry.pushed_at.strftime('%d.%m.%Y %H:%M') if entry.pushed_at else '—' }}</dd>
+        <dt>Письмо</dt>
+        <dd>
+          {% if entry.document %}
+          <a href="{{ url_for('main.document_view', doc_id=entry.document.id) }}">{{ entry.document.filename }}</a>
+          {% if entry.document.letter_number %}<div class="text-xs muted">№ {{ entry.document.letter_number }}</div>{% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </dd>
+      </dl>
+
+      {% if current_user.is_operator %}
+      <hr class="divider">
+      <div class="btn-group">
+        {% if entry.entry_type == 'domain' and not in_rpz and not protected %}
+        <form method="post" action="{{ url_for('main.push_run') }}"
+              data-confirm="1" data-confirm-title="Заблокировать домен?"
+              data-confirm-ok="Заблокировать"
+              data-confirm-body="Домен <strong>{{ entry.value }}</strong> будет добавлен в боевую RPZ-зону
+                с резервной копией, проверкой и перезагрузкой зоны.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="domains" value="{{ entry.value }}">
+          <button class="btn btn--danger btn--sm">{{ ico.icon('upload') }} Заблокировать</button>
+        </form>
+        {% endif %}
+        {% if entry.entry_type == 'domain' and in_rpz %}
+        <form method="post" action="{{ url_for('main.push_remove') }}"
+              data-confirm="1" data-confirm-title="Снять блокировку?"
+              data-confirm-ok="Снять блокировку"
+              data-confirm-body="Домен <strong>{{ entry.value }}</strong> будет удалён из боевой RPZ-зоны.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="domains" value="{{ entry.value }}">
+          <button class="btn btn--sm">{{ ico.icon('x') }} Снять блокировку</button>
+        </form>
+        {% endif %}
+        <form method="post" action="{{ url_for('main.object_delete', entry_id=entry.id) }}"
+              data-confirm="1" data-confirm-title="Удалить запись из базы?"
+              data-confirm-ok="Удалить"
+              data-confirm-body="Запись будет удалена только из этого приложения.<br>
+                На DNS-сервере зона НЕ изменится — при необходимости сначала снимите блокировку.">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn--ghost btn--sm">Удалить из базы</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# --- VirusTotal --- #}
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('shield') }}<span class="card__title">VirusTotal</span>
+      <span style="margin-left:auto">{% include "_vt_badge.html" %}</span>
+    </div>
+    <div class="card__body">
+      {% if vt and not vt.error %}
+      <dl class="kv">
+        <dt>Вредоносных</dt><dd><strong style="color:var(--danger)">{{ vt.malicious }}</strong></dd>
+        <dt>Подозрительных</dt><dd>{{ vt.suspicious }}</dd>
+        <dt>Безопасных</dt><dd>{{ vt.harmless }}</dd>
+        <dt>Не определено</dt><dd>{{ vt.undetected }}</dd>
+        <dt>Репутация</dt><dd>{{ vt.reputation }}</dd>
+        <dt>Проверено</dt><dd>{{ vt.checked_at.strftime('%d.%m.%Y %H:%M') }} UTC</dd>
+      </dl>
+      {% if vt.permalink %}
+      <a class="btn btn--sm mt-1" href="{{ vt.permalink }}" target="_blank" rel="noopener">
+        {{ ico.icon('eye') }} Открыть на VirusTotal</a>
+      {% endif %}
+      {% elif vt and vt.error %}
+      <div class="alert alert--warning" style="margin:0">{{ ico.icon('alert') }}
+        <div class="alert__text">{{ vt.error }}</div></div>
+      {% else %}
+      <div class="empty" style="padding:1.25rem">
+        {{ ico.icon('shield') }}
+        <div class="empty__title">Не проверялся</div>
+        <div class="empty__text">
+          {% if vt_configured %}Запросите вердикт VirusTotal одним нажатием.
+          {% else %}Укажите ключ API VirusTotal в разделе «Настройки».{% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if current_user.is_operator %}
+      <form method="post" action="{{ url_for('main.vt_check') }}" class="mt-1">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="value" value="{{ entry.value }}">
+        <input type="hidden" name="next" value="{{ url_for('main.object_view', entry_id=entry.id) }}">
+        <button class="btn btn--sm" {% if not vt_configured %}disabled title="Не задан ключ API"{% endif %}>
+          {{ ico.icon('refresh') }} {{ 'Проверить повторно' if vt else 'Проверить в VirusTotal' }}
+        </button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {# --- Заметка --- #}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('file') }}<span class="card__title">Заметка</span></div>
+    <div class="card__body">
+      {% if current_user.is_operator %}
+      <form method="post">
+        {{ form.hidden_tag() }}
+        {{ form.notes(rows=4, placeholder="Например: подтверждено расследованием, тикет SOC-1234") }}
+        <button class="btn btn--sm mt-1">{{ ico.icon('check') }} Сохранить</button>
+      </form>
+      {% else %}
+      <p class="text-sm {% if not entry.notes %}muted{% endif %} mb-0">{{ entry.notes or 'Заметок нет.' }}</p>
+      {% endif %}
+    </div>
+  </div>
+
+  {# --- Связанное --- #}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('link') }}<span class="card__title">Связанные записи</span></div>
+    <div class="card__body card__body--flush">
+      {% if related_urls %}
+      <div class="section-title" style="padding:.75rem 1.125rem 0">Ссылки с этим хостом</div>
+      <table class="table">
+        <tbody>
+          {% for u in related_urls %}
+          <tr><td class="value url-cell">{{ u.value }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if pushes %}
+      <div class="section-title" style="padding:.75rem 1.125rem 0">История выгрузок</div>
+      <table class="table">
+        <tbody>
+          {% for p in pushes %}
+          <tr>
+            <td>
+              {% if p.status == 'success' %}<span class="badge badge--success">успешно</span>
+              {% elif p.status == 'dry_run' %}<span class="badge badge--info">предпросмотр</span>
+              {% elif p.status == 'rolled_back' %}<span class="badge badge--warning">откат</span>
+              {% else %}<span class="badge badge--danger">ошибка</span>{% endif %}
+              <span class="text-xs muted">{{ p.started_at.strftime('%d.%m.%Y %H:%M') }}</span>
+            </td>
+            <td class="num">
+              <a class="btn btn--ghost btn--sm" href="{{ url_for('main.push_log_view', log_id=p.id) }}">
+                {{ ico.icon('eye', 'icon icon-sm') }}</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+
+      {% if not related_urls and not pushes %}
+      <div class="empty"><div class="empty__text">Связанных записей нет.</div></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

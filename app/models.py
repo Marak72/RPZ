@@ -133,7 +133,7 @@ class RpzEntry(db.Model):
 
 
 class Document(db.Model):
-    """Загруженное письмо ФСТЭК (.docx/.odt)."""
+    """Письмо ФСТЭК: сам файл письма и все извлечённые из него индикаторы."""
 
     __tablename__ = "documents"
 
@@ -144,11 +144,91 @@ class Document(db.Model):
     entries_found = db.Column(db.Integer, nullable=False, default=0)
     notes = db.Column(db.String(500), default="")
 
+    # Реквизиты письма для поиска и отчётности.
+    letter_number = db.Column(db.String(120), default="")
+    letter_date = db.Column(db.Date)
+
+    # Сохранённый файл письма (для просмотра/скачивания).
+    stored_name = db.Column(db.String(255), default="")   # имя файла в хранилище
+    content_type = db.Column(db.String(100), default="")
+    file_size = db.Column(db.Integer, default=0)
+    # Отдельно приложенный PDF (если разбирался .docx, а смотреть удобнее PDF).
+    pdf_stored_name = db.Column(db.String(255), default="")
+    pdf_original_name = db.Column(db.String(255), default="")
+    pdf_size = db.Column(db.Integer, default=0)
+
     user = db.relationship("User")
     entries = db.relationship("BlockEntry", backref="document", lazy="dynamic")
 
+    @property
+    def is_pdf(self) -> bool:
+        return (self.content_type or "").endswith("pdf")
+
+    @property
+    def viewable_pdf(self) -> bool:
+        """Есть ли PDF, который можно показать прямо в браузере."""
+        return bool(self.pdf_stored_name) or self.is_pdf
+
     def __repr__(self) -> str:
         return f"<Document {self.filename} ({self.entries_found})>"
+
+
+class VtReport(db.Model):
+    """Результат проверки индикатора в VirusTotal.
+
+    Привязан к значению (домен/IP), поэтому один отчёт обслуживает
+    и кандидата, и запись RPZ с тем же значением.
+    """
+
+    __tablename__ = "vt_reports"
+
+    id = db.Column(db.Integer, primary_key=True)
+    value = db.Column(db.String(500), unique=True, nullable=False, index=True)
+    kind = db.Column(db.String(10), nullable=False, default="domain")  # domain / ip
+    malicious = db.Column(db.Integer, nullable=False, default=0)
+    suspicious = db.Column(db.Integer, nullable=False, default=0)
+    harmless = db.Column(db.Integer, nullable=False, default=0)
+    undetected = db.Column(db.Integer, nullable=False, default=0)
+    reputation = db.Column(db.Integer, nullable=False, default=0)
+    total_engines = db.Column(db.Integer, nullable=False, default=0)
+    permalink = db.Column(db.String(500), default="")
+    checked_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    checked_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    error = db.Column(db.String(500), default="")
+
+    @property
+    def verdict(self) -> str:
+        """Итоговая оценка для наглядного отображения."""
+        if self.error:
+            return "error"
+        if self.malicious >= 5:
+            return "malicious"
+        if self.malicious >= 1:
+            return "suspicious"
+        if self.suspicious >= 3:
+            return "suspicious"
+        return "clean"
+
+    @property
+    def score(self) -> str:
+        return f"{self.malicious}/{self.total_engines}" if self.total_engines else "—"
+
+    def __repr__(self) -> str:
+        return f"<VtReport {self.value} {self.score}>"
+
+
+class AppSetting(db.Model):
+    """Настройки приложения вида ключ-значение (секреты хранятся зашифрованно)."""
+
+    __tablename__ = "app_settings"
+
+    key = db.Column(db.String(80), primary_key=True)
+    value = db.Column(db.Text, default="")
+    is_secret = db.Column(db.Boolean, nullable=False, default=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<AppSetting {self.key}>"
 
 
 class BlockEntry(db.Model):
@@ -163,9 +243,16 @@ class BlockEntry(db.Model):
     status = db.Column(db.String(20), nullable=False, default=STATUS_NEW)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     added_by = db.Column(db.Integer, db.ForeignKey("users.id"))
-    notes = db.Column(db.String(500), default="")
+    notes = db.Column(db.Text, default="")
     # Когда запись была выгружена в RPZ-зону этим приложением.
     pushed_at = db.Column(db.DateTime)
+    # Откуда взялась запись: letter (из письма) / manual (добавлена вручную).
+    source = db.Column(db.String(20), nullable=False, default="letter")
+
+    @property
+    def vt(self):
+        """Отчёт VirusTotal для этого значения (если проверялось)."""
+        return VtReport.query.filter_by(value=self.value).first()
 
     @property
     def is_pushable(self) -> bool:

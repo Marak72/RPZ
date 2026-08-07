@@ -1,0 +1,15 @@
+{# Бейдж вердикта VirusTotal. Ожидает переменную `it` (объект с .vt) либо `vt`. #}
+{% set report = vt if vt is defined and vt else (it.vt if it is defined and it else none) %}
+{% if not report %}
+  <span class="text-xs muted">—</span>
+{% elif report.error %}
+  <span class="badge badge--neutral" title="{{ report.error }}">ошибка</span>
+{% elif report.verdict == 'malicious' %}
+  <span class="badge badge--danger" title="Вредоносных вердиктов: {{ report.malicious }}">
+    {{ report.score }}</span>
+{% elif report.verdict == 'suspicious' %}
+  <span class="badge badge--warning" title="Вредоносных вердиктов: {{ report.malicious }}">
+    {{ report.score }}</span>
+{% else %}
+  <span class="badge badge--success" title="Вредоносных вердиктов нет">{{ report.score }}</span>
+{% endif %}

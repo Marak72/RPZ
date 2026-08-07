@@ -28,6 +28,11 @@
 
       <div class="nav-group">
         <div class="nav-group__title">Индикаторы</div>
+        <a class="nav-link {% if ep in ('main.documents', 'main.document_view') %}is-active{% endif %}"
+           href="{{ url_for('main.documents') }}">
+          {{ ico.icon('inbox') }} Письма ФСТЭК
+          <span class="nav-link__count">{{ nav_counts.documents }}</span>
+        </a>
         <a class="nav-link {% if ep == 'main.candidates' and request.args.get('type') != 'ip' %}is-active{% endif %}"
            href="{{ url_for('main.candidates', type='domain') }}">
           {{ ico.icon('globe') }} Домены
@@ -66,9 +71,12 @@
 
       {% if current_user.is_operator %}
       <div class="nav-group">
-        <div class="nav-group__title">Работа с письмами</div>
+        <div class="nav-group__title">Действия</div>
         <a class="nav-link {% if ep in ('main.upload', 'main.preview_save') %}is-active{% endif %}" href="{{ url_for('main.upload') }}">
-          {{ ico.icon('inbox') }} Загрузить письмо
+          {{ ico.icon('upload') }} Загрузить письмо
+        </a>
+        <a class="nav-link {% if ep == 'main.manual_add' %}is-active{% endif %}" href="{{ url_for('main.manual_add') }}">
+          {{ ico.icon('play') }} Добавить вручную
         </a>
         <a class="nav-link {% if ep == 'main.settings' %}is-active{% endif %}" href="{{ url_for('main.settings') }}">
           {{ ico.icon('settings') }} Настройки

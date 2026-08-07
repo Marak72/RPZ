@@ -69,6 +69,14 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="filename" value="{{ filename }}">
   <input type="hidden" name="notes" value="{{ notes }}">
+  <input type="hidden" name="letter_number" value="{{ letter_number }}">
+  <input type="hidden" name="letter_date" value="{{ letter_date }}">
+  <input type="hidden" name="stored_name" value="{{ stored_name }}">
+  <input type="hidden" name="content_type" value="{{ content_type }}">
+  <input type="hidden" name="file_size" value="{{ file_size }}">
+  <input type="hidden" name="pdf_stored_name" value="{{ pdf_stored_name }}">
+  <input type="hidden" name="pdf_original_name" value="{{ pdf_original_name }}">
+  <input type="hidden" name="pdf_size" value="{{ pdf_size }}">
   {# скрытые поля со всеми найденными значениями — для выгрузки CSV #}
   {% for it in groups.domains %}<input type="hidden" name="all_domain" value="{{ it.value }}">{% endfor %}
   {% for it in groups.ips %}<input type="hidden" name="all_ip" value="{{ it.value }}">{% endfor %}

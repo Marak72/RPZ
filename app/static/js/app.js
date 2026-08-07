@@ -115,6 +115,7 @@
         if (box.disabled) return;
         if (mode === "none") box.checked = false;
         else if (mode === "pending") box.checked = box.dataset.pending === "1";
+        else if (mode === "inzone") box.checked = box.dataset.inzone === "1";
         else box.checked = true;
       });
     updateSelectionCount("[data-select-scope]");

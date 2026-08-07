@@ -74,9 +74,11 @@
         <kbd>/</kbd>
       </div>
       <button type="button" class="btn btn--sm" data-select-all="push" data-select-mode="pending">
-        {{ ico.icon('check') }} Только отсутствующие в зоне
+        {{ ico.icon('check') }} Не в зоне ({{ pending_count }})
       </button>
-      <button type="button" class="btn btn--sm" data-select-all="push" data-select-mode="all">Все</button>
+      <button type="button" class="btn btn--sm" data-select-all="push" data-select-mode="inzone">
+        В зоне ({{ in_zone_count }})
+      </button>
       <button type="button" class="btn btn--sm" data-select-all="push" data-select-mode="none">Снять</button>
       <div class="toolbar__spacer"></div>
       <button type="button" class="btn btn--sm" data-copy-column="pushTable">
@@ -91,6 +93,7 @@
             <th class="col-check"></th>
             <th>Домен</th>
             <th>В зоне RPZ</th>
+            <th>VT</th>
             <th>Статус</th>
             <th>Выгружен</th>
             <th>Источник</th>
@@ -102,10 +105,14 @@
             <td>
               <input type="checkbox" name="domains" value="{{ r.value }}"
                      data-select="push" data-pending="{{ '0' if r.in_rpz else '1' }}"
-                     {% if r.in_rpz %}disabled title="Уже в зоне"{% endif %}>
+                     data-inzone="{{ '1' if r.in_rpz else '0' }}"
+                     {% if r.protected %}disabled title="Защищённый домен — блокировка запрещена"{% endif %}>
             </td>
             <td class="value" data-value="{{ r.value }}">
-              {{ r.value }}
+              {% if r.id %}
+              <a href="{{ url_for('main.object_view', entry_id=r.id) }}">{{ r.value }}</a>
+              {% else %}{{ r.value }}{% endif %}
+              {% if r.protected %}<span class="badge badge--info">защищён</span>{% endif %}
               <button type="button" class="copy-btn" data-copy="{{ r.value }}" title="Скопировать">
                 {{ ico.icon('copy', 'icon icon-sm') }}
               </button>
@@ -114,23 +121,32 @@
               {% if r.in_rpz %}<span class="badge badge--success">{{ ico.icon('check', 'icon icon-sm') }} да</span>
               {% else %}<span class="badge badge--warning">нет</span>{% endif %}
             </td>
+            <td>{% with vt = r.vt %}{% include "_vt_badge.html" %}{% endwith %}</td>
             <td>
-              {% if r.status == 'pushed' %}<span class="badge badge--success">выгружен</span>
+              {% if r.source == 'zone' %}<span class="badge badge--neutral">только в зоне</span>
+              {% elif r.status == 'pushed' %}<span class="badge badge--success">выгружен</span>
               {% elif r.status == 'in_rpz' %}<span class="badge badge--neutral">в RPZ</span>
               {% else %}<span class="badge badge--warning">новый</span>{% endif %}
             </td>
             <td class="muted nowrap text-xs">{{ r.pushed_at.strftime('%d.%m.%Y %H:%M') if r.pushed_at else '—' }}</td>
-            <td class="muted text-xs">{{ r.document or '—' }}</td>
+            <td class="muted text-xs">
+              {% if r.source == 'manual' %}вручную
+              {% elif r.source == 'zone' %}—
+              {% else %}{{ r.document or '—' }}{% endif %}
+            </td>
           </tr>
           {% else %}
           <tr data-empty>
-            <td colspan="6">
+            <td colspan="7">
               <div class="empty">
                 {{ ico.icon('globe') }}
                 <div class="empty__title">Доменов нет</div>
-                <div class="empty__text">Загрузите письмо ФСТЭК, чтобы появились кандидаты на блокировку.</div>
+                <div class="empty__text">Загрузите письмо ФСТЭК или добавьте домены вручную.</div>
                 {% if current_user.is_operator %}
-                <a class="btn btn--primary btn--sm" href="{{ url_for('main.upload') }}">{{ ico.icon('upload') }} Загрузить письмо</a>
+                <div class="btn-group" style="justify-content:center">
+                  <a class="btn btn--primary btn--sm" href="{{ url_for('main.upload') }}">{{ ico.icon('upload') }} Загрузить письмо</a>
+                  <a class="btn btn--sm" href="{{ url_for('main.manual_add') }}">Добавить вручную</a>
+                </div>
                 {% endif %}
               </div>
             </td>
@@ -146,10 +162,15 @@
       <span>Выбрано доменов: <strong data-selected-count>0</strong></span>
       <div class="toolbar__spacer"></div>
       <button type="submit" name="dry_run" value="1" class="btn btn--sm" data-no-confirm>
-        {{ ico.icon('eye') }} Предпросмотр (без изменений)
+        {{ ico.icon('eye') }} Предпросмотр
+      </button>
+      <button type="submit" formaction="{{ url_for('main.push_remove') }}"
+              formnovalidate class="btn btn--sm" data-no-confirm
+              onclick="return confirm('Снять блокировку с выбранных доменов?\n\nОни будут удалены из боевой RPZ-зоны (с резервной копией и проверкой).');">
+        {{ ico.icon('x') }} Снять блокировку
       </button>
       <button type="submit" class="btn btn--danger btn--sm">
-        {{ ico.icon('upload') }} Выгрузить на сервер
+        {{ ico.icon('upload') }} Заблокировать
       </button>
     </div>
     {% endif %}

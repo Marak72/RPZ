@@ -54,6 +54,7 @@ class PushError(Exception):
 @dataclass
 class PushResult:
     status: str                      # success / dry_run / failed / rolled_back
+    action: str = "add"              # add / remove
     added: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
     rejected: list[str] = field(default_factory=list)
@@ -168,65 +169,67 @@ def validate_domains(domains) -> tuple[list[str], list[str]]:
     return ok, rejected
 
 
-# --- Выгрузка на сервер ----------------------------------------------------
 
-def push_domains(
-    server,
-    domains,
-    timeout: int = 30,
-    dry_run: bool = False,
-    author: str = "",
-) -> PushResult:
-    """Выгрузить домены в RPZ-зону. При dry_run боевой файл не изменяется."""
-    result = PushResult(status="dry_run" if dry_run else "failed")
-    valid, rejected = validate_domains(domains)
-    result.rejected = rejected
-    if rejected:
-        result.steps.append(f"Отклонено некорректных значений: {len(rejected)}")
-    if not valid:
-        raise PushError("Нет корректных доменов для выгрузки.")
+def remove_records(content: str, domains) -> tuple[str, int]:
+    """Убрать из зоны все записи указанных доменов (и их wildcard-варианты).
 
+    Возвращает (новое содержимое, число удалённых строк). Служебные строки
+    зоны (SOA, NS, $TTL) не затрагиваются никогда.
+    """
+    targets = {(d or "").strip().lower().rstrip(".") for d in domains if d}
+    kept: list[str] = []
+    removed = 0
+    for line in content.splitlines():
+        stripped = line.strip()
+        tokens = stripped.split()
+        drop = False
+        if tokens and not stripped.startswith((";", "$", "@")):
+            rest = tokens[1:]
+            if rest and rest[0].upper() == "IN":
+                rest = rest[1:]
+            if rest and rest[0].upper() in ("A", "CNAME"):
+                name = tokens[0]
+                if name.startswith("*."):
+                    name = name[2:]
+                if name.rstrip(".").lower() in targets:
+                    drop = True
+        if drop:
+            removed += 1
+        else:
+            kept.append(line)
+    new_content = "\n".join(kept)
+    if content.endswith("\n") and not new_content.endswith("\n"):
+        new_content += "\n"
+    return new_content, removed
+
+
+# --- Общая безопасная процедура изменения зоны -----------------------------
+
+def _apply_zone_change(server, timeout, dry_run, result, transform, verify):
+    """Выполнить изменение зоны по безопасной процедуре.
+
+    transform(current, result) -> новое содержимое либо None, если менять нечего.
+    verify(after, result) -> текст ошибки либо None, если всё в порядке.
+    """
     stamp = datetime.now().strftime("%Y%m%d%H%M%S")
     tmp_path = f"/tmp/rpz-fstec-{stamp}.db"
     zone = server.zone_file_path
     backup_path = f"{zone}.bak-{stamp}"
 
     with ssh_session(server, timeout) as client:
-        # 1. Прочитать текущую зону.
         current = read_file(client, zone)
         result.steps.append(f"Прочитан файл зоны {zone} ({len(current)} байт)")
 
-        # 2. Отфильтровать уже присутствующие домены.
-        existing = {e.domain for e in rpz_parser.parse(current)}
-        to_add = [d for d in valid if d not in existing]
-        result.skipped = [d for d in valid if d in existing]
-        if result.skipped:
-            result.steps.append(f"Уже в зоне, пропущено: {len(result.skipped)}")
-        if not to_add:
+        new_content = transform(current, result)
+        if new_content is None:
             result.status = "dry_run" if dry_run else "success"
-            result.steps.append("Новых доменов нет — изменения не требуются.")
-            result.added = []
             return result
-        result.added = to_add
 
-        # 3-4. Собрать новое содержимое с инкрементом serial.
-        comment = (
-            f"добавлено ФСТЭК-РПЗ {datetime.now().strftime('%d.%m.%Y %H:%M')}"
-            + (f" ({author})" if author else "")
-        )
-        new_content, old_serial, new_serial = build_new_content(current, to_add, comment)
-        result.old_serial, result.new_serial = old_serial, new_serial
-        result.diff = build_records(to_add, comment)
-        result.steps.append(f"Serial: {old_serial} → {new_serial}")
-        result.steps.append(f"Будет добавлено доменов: {len(to_add)} "
-                            f"({len(to_add) * 2} записей с учётом wildcard)")
-
-        # 5. Загрузить во временный файл (боевой файл ещё не тронут).
         write_file(client, tmp_path, new_content)
         result.steps.append(f"Новая версия зоны загружена во временный файл {tmp_path}")
 
         try:
-            # 6. Проверка синтаксиса зоны.
+            # Проверка синтаксиса до любых изменений боевого файла.
             if server.validate_zone:
                 checkzone = _find_binary(client, "named-checkzone")
                 if not checkzone:
@@ -244,16 +247,20 @@ def push_domains(
                         "Проверка зоны не пройдена — боевой файл НЕ изменён.\n"
                         f"{out}\n{err}".strip()
                     )
-                result.steps.append(f"named-checkzone: OK ({out.splitlines()[-1] if out else 'ok'})")
+                result.steps.append(
+                    f"named-checkzone: OK ({out.splitlines()[-1] if out else 'ok'})"
+                )
             else:
-                result.steps.append("ВНИМАНИЕ: проверка named-checkzone отключена в настройках")
+                result.steps.append(
+                    "ВНИМАНИЕ: проверка named-checkzone отключена в настройках"
+                )
 
             if dry_run:
                 result.status = "dry_run"
                 result.steps.append("Режим предпросмотра: боевой файл не изменялся.")
                 return result
 
-            # 7. Резервная копия боевого файла.
+            # Резервная копия боевого файла.
             rc, _, err = run_command(
                 client,
                 sudo_wrap(server, f"cp -p {shell_quote(zone)} {shell_quote(backup_path)}"),
@@ -264,7 +271,7 @@ def push_domains(
             result.backup_path = backup_path
             result.steps.append(f"Создана резервная копия: {backup_path}")
 
-            # 8. Установка нового содержимого с сохранением владельца/прав/SELinux.
+            # Установка нового содержимого (сохраняет владельца, права, SELinux).
             rc, _, err = run_command(
                 client,
                 sudo_wrap(server, f"cat {shell_quote(tmp_path)} > {shell_quote(zone)}"),
@@ -274,40 +281,38 @@ def push_domains(
                 raise PushError(f"Не удалось записать файл зоны: {err}")
             result.steps.append("Новое содержимое установлено в файл зоны")
 
-            # 9. Перезагрузка зоны.
+            # Перезагрузка зоны.
             if server.reload_zone:
                 rndc = _find_binary(client, "rndc")
                 if not rndc:
-                    raise PushError("На сервере не найден rndc — не удалось перезагрузить зону.")
+                    raise PushError(
+                        "На сервере не найден rndc — не удалось перезагрузить зону."
+                    )
                 rc, out, err = run_command(
                     client, rndc_command(server, rndc), timeout=timeout
                 )
                 if rc != 0:
-                    raise PushError(f"rndc reload завершился с ошибкой: {out} {err}".strip())
+                    raise PushError(
+                        f"rndc reload завершился с ошибкой: {out} {err}".strip()
+                    )
                 result.steps.append(f"rndc reload: {out or 'OK'}")
 
-            # 10. Контрольная проверка: перечитать зону и убедиться в наличии записей.
+            # Контрольная проверка результата.
             after = read_file(client, zone)
-            after_domains = {e.domain for e in rpz_parser.parse(after)}
-            missing = [d for d in to_add if d not in after_domains]
-            if missing:
-                raise PushError(
-                    f"После записи в зоне отсутствуют домены: {', '.join(missing[:5])}"
-                )
-            if find_serial(after) != new_serial:
-                raise PushError("После записи serial зоны не соответствует ожидаемому.")
-            result.steps.append("Проверка после записи: все домены на месте, serial обновлён")
+            problem = verify(after, result)
+            if problem:
+                raise PushError(problem)
+            result.steps.append("Проверка после записи пройдена")
 
             result.status = "success"
             return result
 
         except (PushError, SshError) as exc:
-            # Откат, если боевой файл уже был изменён.
             result.error = str(exc)
             if result.backup_path:
                 result.steps.append(f"ОШИБКА: {exc}")
-                rollback_ok = _rollback(client, server, backup_path, timeout, result)
-                result.status = "rolled_back" if rollback_ok else "failed"
+                ok = _rollback(client, server, backup_path, timeout, result)
+                result.status = "rolled_back" if ok else "failed"
             else:
                 result.status = "failed"
                 result.steps.append(f"ОШИБКА (боевой файл не изменялся): {exc}")
@@ -315,6 +320,129 @@ def push_domains(
 
         finally:
             run_command(client, f"rm -f {shell_quote(tmp_path)}", timeout=timeout)
+
+
+# --- Добавление доменов ----------------------------------------------------
+
+def push_domains(
+    server,
+    domains,
+    timeout: int = 30,
+    dry_run: bool = False,
+    author: str = "",
+    protected: set | None = None,
+) -> PushResult:
+    """Добавить домены в RPZ-зону. При dry_run боевой файл не изменяется."""
+    result = PushResult(status="dry_run" if dry_run else "failed", action="add")
+    valid, rejected = validate_domains(domains)
+
+    # Защищённые домены не должны попасть в блокировку ни при каких условиях.
+    if protected:
+        blocked_by_policy = [d for d in valid if d in protected]
+        if blocked_by_policy:
+            rejected.extend(blocked_by_policy)
+            valid = [d for d in valid if d not in protected]
+            result.steps.append(
+                "Отклонены защищённые домены: " + ", ".join(blocked_by_policy)
+            )
+
+    result.rejected = rejected
+    if rejected:
+        result.steps.append(f"Отклонено некорректных значений: {len(rejected)}")
+    if not valid:
+        raise PushError("Нет корректных доменов для выгрузки.")
+
+    to_add: list[str] = []
+
+    def transform(current, res):
+        existing = {e.domain for e in rpz_parser.parse(current)}
+        to_add.extend(d for d in valid if d not in existing)
+        res.skipped = [d for d in valid if d in existing]
+        if res.skipped:
+            res.steps.append(f"Уже в зоне, пропущено: {len(res.skipped)}")
+        if not to_add:
+            res.steps.append("Новых доменов нет — изменения не требуются.")
+            return None
+        res.added = list(to_add)
+        comment = (
+            f"добавлено ФСТЭК-РПЗ {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+            + (f" ({author})" if author else "")
+        )
+        content, old_serial, new_serial = build_new_content(current, to_add, comment)
+        res.old_serial, res.new_serial = old_serial, new_serial
+        res.diff = build_records(to_add, comment)
+        res.steps.append(f"Serial: {old_serial} → {new_serial}")
+        res.steps.append(
+            f"Будет добавлено доменов: {len(to_add)} "
+            f"({len(to_add) * 2} записей с учётом wildcard)"
+        )
+        return content
+
+    def verify(after, res):
+        after_domains = {e.domain for e in rpz_parser.parse(after)}
+        missing = [d for d in to_add if d not in after_domains]
+        if missing:
+            return f"После записи в зоне отсутствуют домены: {', '.join(missing[:5])}"
+        if find_serial(after) != res.new_serial:
+            return "После записи serial зоны не соответствует ожидаемому."
+        return None
+
+    return _apply_zone_change(server, timeout, dry_run, result, transform, verify)
+
+
+# --- Удаление доменов ------------------------------------------------------
+
+def remove_domains(
+    server,
+    domains,
+    timeout: int = 30,
+    dry_run: bool = False,
+    author: str = "",
+) -> PushResult:
+    """Удалить домены из RPZ-зоны (снять блокировку) по той же процедуре."""
+    result = PushResult(status="dry_run" if dry_run else "failed", action="remove")
+    wanted = [(d or "").strip().lower().rstrip(".") for d in domains if (d or "").strip()]
+    if not wanted:
+        raise PushError("Не указано ни одного домена для удаления.")
+
+    removed_domains: list[str] = []
+
+    def transform(current, res):
+        existing = {e.domain for e in rpz_parser.parse(current)}
+        removed_domains.extend(d for d in wanted if d in existing)
+        res.skipped = [d for d in wanted if d not in existing]
+        if res.skipped:
+            res.steps.append(f"В зоне отсутствуют, пропущено: {len(res.skipped)}")
+        if not removed_domains:
+            res.steps.append("Указанных доменов в зоне нет — изменения не требуются.")
+            return None
+
+        content, removed_lines = remove_records(current, removed_domains)
+        old_serial = find_serial(content)
+        if not old_serial:
+            raise PushError("В файле зоны не найден serial (SOA). Удаление отменено.")
+        new_serial = next_serial(old_serial)
+        content = replace_serial(content, new_serial)
+        res.added = list(removed_domains)   # для журнала: какие домены затронуты
+        res.old_serial, res.new_serial = old_serial, new_serial
+        res.diff = "\n".join(f"- {d}" for d in removed_domains)
+        res.steps.append(f"Serial: {old_serial} → {new_serial}")
+        res.steps.append(
+            f"Будет удалено доменов: {len(removed_domains)} "
+            f"({removed_lines} строк зоны)"
+        )
+        return content
+
+    def verify(after, res):
+        after_domains = {e.domain for e in rpz_parser.parse(after)}
+        still = [d for d in removed_domains if d in after_domains]
+        if still:
+            return f"После записи в зоне остались домены: {', '.join(still[:5])}"
+        if find_serial(after) != res.new_serial:
+            return "После записи serial зоны не соответствует ожидаемому."
+        return None
+
+    return _apply_zone_change(server, timeout, dry_run, result, transform, verify)
 
 
 def _rollback(client, server, backup_path: str, timeout: int, result: PushResult) -> bool:

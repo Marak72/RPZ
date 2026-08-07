@@ -23,8 +23,16 @@ class Config:
     # Сгенерировать: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
     RPZ_FERNET_KEY = os.environ.get("RPZ_FERNET_KEY")
 
-    # Ограничение размера загружаемого письма (10 МБ).
-    MAX_CONTENT_LENGTH = 10 * 1024 * 1024
+    # Ограничение размера загружаемого письма (32 МБ — сканы в PDF бывают тяжёлыми).
+    MAX_CONTENT_LENGTH = 32 * 1024 * 1024
+
+    # Каталог для хранения самих файлов писем ФСТЭК.
+    LETTERS_DIR = os.environ.get("LETTERS_DIR", os.path.join(INSTANCE_DIR, "letters"))
+
+    # VirusTotal: сколько индикаторов проверять за один пакетный запуск
+    # (у бесплатного ключа лимит 4 запроса в минуту, 500 в сутки).
+    VT_BATCH_LIMIT = int(os.environ.get("VT_BATCH_LIMIT", "8"))
+    VT_TIMEOUT = int(os.environ.get("VT_TIMEOUT", "20"))
 
     # Таймаут SSH-подключения, секунды.
     SSH_TIMEOUT = int(os.environ.get("SSH_TIMEOUT", "15"))

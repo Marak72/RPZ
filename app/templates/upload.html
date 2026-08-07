@@ -18,15 +18,34 @@
 
       <div class="field">
         {{ form.document.label(class="label") }}
-        {{ form.document(accept=".docx,.odt") }}
+        {{ form.document(accept=".docx,.odt,.pdf") }}
         {% for e in form.document.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
-        <div class="help">Поддерживаются форматы <code>.docx</code> и <code>.odt</code>, до 10 МБ.</div>
+        <div class="help">Форматы <code>.docx</code>, <code>.odt</code>, <code>.pdf</code>, до 32 МБ.
+          Файл сохраняется целиком — письмо можно будет открыть позже.</div>
+      </div>
+
+      <div class="field">
+        {{ form.pdf.label(class="label") }}
+        {{ form.pdf(accept=".pdf") }}
+        {% for e in form.pdf.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        <div class="help">Нужен, только если основной файл — <code>.docx</code>/<code>.odt</code>:
+          PDF откроется прямо в браузере.</div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ form.letter_number.label(class="label") }}
+          {{ form.letter_number(placeholder="240/54/1234") }}
+        </div>
+        <div class="field">
+          {{ form.letter_date.label(class="label") }}
+          {{ form.letter_date() }}
+        </div>
       </div>
 
       <div class="field">
         {{ form.notes.label(class="label") }}
-        {{ form.notes(placeholder="например: исх. № 240/54/1234 от 06.08.2026") }}
-        <div class="help">Необязательно — поможет потом найти источник индикатора.</div>
+        {{ form.notes(placeholder="краткое описание") }}
       </div>
 
       <button type="submit" class="btn btn--primary">

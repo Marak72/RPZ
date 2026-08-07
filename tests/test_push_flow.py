@@ -230,6 +230,49 @@ def test_push_with_narrow_sudo_for_rndc_only(patched):
     assert client.sudo_calls == [["/usr/sbin/rndc", "reload", "rpz.block"]]
 
 
+def test_remove_domain_from_zone(patched):
+    client = patched(FakeClient())
+    result = rpz_writer.remove_domains(FakeServer(), ["existing.ru"])
+    assert result.status == "success"
+    assert result.action == "remove"
+    zone = client.files[FakeServer.zone_file_path]
+    assert "existing.ru" not in zone
+    # Служебные строки зоны остались нетронутыми.
+    assert "SOA" in zone and "$TTL" in zone and "NS" in zone
+    assert result.new_serial != result.old_serial
+
+
+def test_remove_missing_domain_changes_nothing(patched):
+    client = patched(FakeClient())
+    result = rpz_writer.remove_domains(FakeServer(), ["absent.com"])
+    assert result.skipped == ["absent.com"]
+    assert client.files[FakeServer.zone_file_path] == ZONE
+
+
+def test_remove_dry_run_does_not_touch_zone(patched):
+    client = patched(FakeClient())
+    result = rpz_writer.remove_domains(FakeServer(), ["existing.ru"], dry_run=True)
+    assert result.status == "dry_run"
+    assert client.files[FakeServer.zone_file_path] == ZONE
+
+
+def test_remove_rolls_back_on_reload_failure(patched):
+    client = patched(FakeClient(reload_fails=True))
+    with pytest.raises(PushError):
+        rpz_writer.remove_domains(FakeServer(), ["existing.ru"])
+    assert client.files[FakeServer.zone_file_path] == ZONE
+
+
+def test_protected_domains_are_never_pushed(patched):
+    client = patched(FakeClient())
+    result = rpz_writer.push_domains(
+        FakeServer(), ["evil.com", "gosuslugi.ru"], protected={"gosuslugi.ru"}
+    )
+    assert result.added == ["evil.com"]
+    assert "gosuslugi.ru" in result.rejected
+    assert "gosuslugi.ru" not in client.files[FakeServer.zone_file_path]
+
+
 def test_temp_file_is_cleaned_up(patched):
     client = patched(FakeClient())
     rpz_writer.push_domains(FakeServer(), ["evil.com"])
