@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Загрузка статистики{% endblock %}
+{% block subheading %}<div class="topbar__sub">Домены из SkyDNS</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Загрузка статистики SkyDNS</h2>
+    <p>Сохраняются только домены категорий, связанных с безопасностью — остальной
+       трафик организации в разбор не попадает.</p>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('download') }}<span class="card__title">Из API SkyDNS</span>
+      <div style="margin-left:auto">
+        {% if skydns_configured %}<span class="badge badge--success"><i class="dot dot--ok"></i> настроен</span>
+        {% else %}<span class="badge badge--warning"><i class="dot dot--warn"></i> не настроен</span>{% endif %}
+      </div>
+    </div>
+    <div class="card__body">
+      <form method="post">
+        {{ sync_form.hidden_tag() }}
+        <div class="row">
+          <div class="field">
+            {{ sync_form.start.label(class="label") }}
+            {{ sync_form.start() }}
+          </div>
+          <div class="field">
+            {{ sync_form.end.label(class="label") }}
+            {{ sync_form.end() }}
+          </div>
+        </div>
+        {{ sync_form.submit_sync(class="btn btn--primary", disabled=(not skydns_configured)) }}
+        {% if not skydns_configured %}
+        <div class="help">Укажите адрес и учётные данные SkyDNS в
+          <a href="{{ url_for('main.settings') }}">настройках</a>.</div>
+        {% endif %}
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">{{ ico.icon('upload') }}<span class="card__title">Импорт выгрузки CSV</span></div>
+    <div class="card__body">
+      <form method="post" enctype="multipart/form-data">
+        {{ import_form.hidden_tag() }}
+        <div class="field">
+          {{ import_form.report.label(class="label") }}
+          {{ import_form.report() }}
+          {% for error in import_form.report.errors %}
+          <div class="error-text">{{ error }}</div>
+          {% endfor %}
+          <div class="help">
+            Выгрузка статистики по сайтам из личного кабинета SkyDNS. Нужны колонки
+            с доменом и категорией; кодировка и разделитель определяются автоматически.
+          </div>
+        </div>
+        {{ import_form.submit_import(class="btn btn--primary") }}
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">{{ ico.icon('play') }}<span class="card__title">Добавить домены вручную</span></div>
+    <div class="card__body">
+      <form method="post">
+        {{ manual_form.hidden_tag() }}
+        <div class="field">
+          {{ manual_form.values.label(class="label") }}
+          {{ manual_form.values(rows=5, placeholder="evil-domain.ru&#10;c2.example.net") }}
+          {% for error in manual_form.values.errors %}
+          <div class="error-text">{{ error }}</div>
+          {% endfor %}
+          <div class="help">По одному домену в строке. Проверка категории не выполняется.</div>
+        </div>
+        <div class="field">
+          {{ manual_form.category.label(class="label") }}
+          {{ manual_form.category(placeholder="malware") }}
+        </div>
+        {{ manual_form.submit_manual(class="btn btn--primary") }}
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">{{ ico.icon('shield') }}<span class="card__title">Категории безопасности</span></div>
+    <div class="card__body">
+      <p class="text-sm muted">Домен попадает в разбор, если его категория совпадает
+         с одной из этих строк (или содержит характерный признак угрозы).</p>
+      <div class="inline">
+        {% for cat in categories %}
+        <span class="badge badge--danger">{{ cat }}</span>
+        {% else %}
+        <span class="text-sm muted">Список пуст — берутся признаки по умолчанию.</span>
+        {% endfor %}
+      </div>
+      <div class="help mt-1">
+        Список правится в <a href="{{ url_for('main.settings') }}">настройках</a>.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('clock') }}<span class="card__title">Последние загрузки</span></div>
+  <div class="card__body card__body--flush">
+    {% if recent %}
+    <table class="table">
+      <thead>
+        <tr><th>Время</th><th>Источник</th><th>Итог</th><th>Период</th>
+            <th class="num">Опасных</th><th class="num">Новых</th><th>Сообщение</th></tr>
+      </thead>
+      <tbody>
+        {% for s in recent %}
+        <tr>
+          <td class="nowrap text-xs">{{ s.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td class="text-xs">{{ 'API' if s.source == 'api' else ('CSV' if s.source == 'csv' else 'вручную') }}</td>
+          <td>
+            {% if s.status == 'success' %}<span class="badge badge--success">успешно</span>
+            {% else %}<span class="badge badge--danger">ошибка</span>{% endif %}
+          </td>
+          <td class="text-xs nowrap">
+            {% if s.period_from %}{{ s.period_from.strftime('%d.%m.%Y') }} — {{ s.period_to.strftime('%d.%m.%Y') }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">{{ s.domains_total }}</td>
+          <td class="num">{{ s.domains_new }}</td>
+          <td class="text-xs muted url-cell">{{ s.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      {{ ico.icon('clock') }}
+      <div class="empty__title">Загрузок ещё не было</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

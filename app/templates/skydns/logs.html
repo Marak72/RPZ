@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Журнал запросов{% endblock %}
+{% block subheading %}<div class="topbar__sub">Обращения к SIEM и SkyDNS</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Журнал запросов</h2>
+    <p>Что и когда запрашивалось во внешних системах. Фильтр сохраняется целиком —
+       его можно повторить руками в интерфейсе SIEM.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__header">{{ ico.icon('search') }}<span class="card__title">Запросы в MaxPatrol SIEM</span></div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Время</th><th>Домен</th><th>Итог</th>
+          <th class="num">Хостов</th><th class="num">Событий</th>
+          <th>Период</th><th>Оператор</th><th>Фильтр / сообщение</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in items %}
+        <tr>
+          <td class="nowrap text-xs">{{ l.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td class="value">
+            {% if l.threat %}
+            <a href="{{ url_for('skydns.threat_view', threat_id=l.threat.id) }}">{{ l.domain }}</a>
+            {% else %}{{ l.domain }}{% endif %}
+          </td>
+          <td>
+            {% if l.status == 'success' %}<span class="badge badge--success">успешно</span>
+            {% else %}<span class="badge badge--danger">ошибка</span>{% endif %}
+          </td>
+          <td class="num">{{ l.hosts_found }}</td>
+          <td class="num">{{ l.events_total }}</td>
+          <td class="text-xs nowrap muted">
+            {% if l.period_from %}
+              {{ l.period_from.strftime('%d.%m %H:%M') }} — {{ l.period_to.strftime('%d.%m %H:%M') }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-xs">{{ l.user.username if l.user else '—' }}</td>
+          <td class="text-xs mono url-cell">{{ l.query_filter or l.message }}</td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="8">
+            <div class="empty">
+              {{ ico.icon('search') }}
+              <div class="empty__title">Запросов ещё не было</div>
+              <div class="empty__text">Запустите проверку домена в SIEM из карточки домена.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "_pagination.html" %}
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('download') }}<span class="card__title">Загрузки статистики SkyDNS</span></div>
+  <div class="card__body card__body--flush">
+    {% if syncs %}
+    <table class="table">
+      <thead>
+        <tr><th>Время</th><th>Источник</th><th>Итог</th><th>Период</th>
+            <th class="num">Опасных</th><th class="num">Новых</th>
+            <th>Оператор</th><th>Сообщение</th></tr>
+      </thead>
+      <tbody>
+        {% for s in syncs %}
+        <tr>
+          <td class="nowrap text-xs">{{ s.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td class="text-xs">{{ 'API' if s.source == 'api' else ('CSV' if s.source == 'csv' else 'вручную') }}</td>
+          <td>
+            {% if s.status == 'success' %}<span class="badge badge--success">успешно</span>
+            {% else %}<span class="badge badge--danger">ошибка</span>{% endif %}
+          </td>
+          <td class="text-xs nowrap">
+            {% if s.period_from %}{{ s.period_from.strftime('%d.%m.%Y') }} — {{ s.period_to.strftime('%d.%m.%Y') }}
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">{{ s.domains_total }}</td>
+          <td class="num">{{ s.domains_new }}</td>
+          <td class="text-xs">{{ s.user.username if s.user else '—' }}</td>
+          <td class="text-xs muted url-cell">{{ s.message }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      {{ ico.icon('download') }}
+      <div class="empty__title">Загрузок ещё не было</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -2,16 +2,12 @@
 выгрузка на боевой DNS-сервер, экспорт CSV и настройки."""
 from __future__ import annotations
 
-import csv
-import io
 import os
 import uuid
 from datetime import datetime
-from functools import wraps
 
 from flask import (
     Blueprint,
-    Response,
     abort,
     current_app,
     flash,
@@ -45,14 +41,52 @@ from ..services import doc_parser, rpz_parser, rpz_writer, vt_client
 from ..services.rpz_writer import PushError
 from ..services.ssh_client import SshError, read_remote_file, test_connection
 from ..settings_store import (
+    DEFAULT_SIEM_FILTER,
+    DEFAULT_SIEM_GROUP_FIELD,
+    DEFAULT_SKYDNS_CATEGORIES,
     KEY_PROTECTED,
+    KEY_SIEM_AUTH_MODE,
+    KEY_SIEM_AUTH_TYPE,
+    KEY_SIEM_CLIENT_ID,
+    KEY_SIEM_CLIENT_SECRET,
+    KEY_SIEM_FILTER,
+    KEY_SIEM_GROUP_FIELD,
+    KEY_SIEM_LIMIT,
+    KEY_SIEM_PASSWORD,
+    KEY_SIEM_URL,
+    KEY_SIEM_USERNAME,
+    KEY_SIEM_VERIFY,
+    KEY_SIEM_WINDOW,
+    KEY_SKYDNS_CATEGORIES,
+    KEY_SKYDNS_DAYS,
+    KEY_SKYDNS_LOGIN,
+    KEY_SKYDNS_MAP,
+    KEY_SKYDNS_PASSWORD,
+    KEY_SKYDNS_PROFILE,
+    KEY_SKYDNS_STATS_PATH,
+    KEY_SKYDNS_TOKEN,
+    KEY_SKYDNS_URL,
+    KEY_SKYDNS_VERIFY,
     KEY_VT_API,
+    get_bool,
+    get_int,
     get_protected_domains,
     get_setting,
     get_vt_key,
+    load_siem_config,
     set_setting,
 )
-from .forms import AppSettingsForm, ManualAddForm, NotesForm, SshServerForm, UploadForm
+from ..web_utils import csv_response as _csv_response
+from ..web_utils import operator_required
+from .forms import (
+    AppSettingsForm,
+    ManualAddForm,
+    NotesForm,
+    SiemSettingsForm,
+    SkydnsSettingsForm,
+    SshServerForm,
+    UploadForm,
+)
 
 main_bp = Blueprint("main", __name__)
 
@@ -88,19 +122,6 @@ def inject_nav_counts():
         return {"nav_counts": empty}
 
 
-def operator_required(view):
-    """Доступ только для операторов; менеджеры — только просмотр."""
-
-    @wraps(view)
-    @login_required
-    def wrapped(*args, **kwargs):
-        if not current_user.is_operator:
-            abort(403)
-        return view(*args, **kwargs)
-
-    return wrapped
-
-
 def _latest_snapshot() -> RpzSnapshot | None:
     return RpzSnapshot.query.order_by(RpzSnapshot.fetched_at.desc()).first()
 
@@ -115,24 +136,6 @@ def _latest_blocked_domains() -> set[str]:
 
 def _active_server() -> SshServer | None:
     return SshServer.query.filter_by(is_active=True).first()
-
-
-def _csv_response(filename: str, header: list[str], rows) -> Response:
-    """Сформировать CSV-файл (разделитель ';' и BOM — корректно открывается в Excel)."""
-    buffer = io.StringIO()
-    writer = csv.writer(buffer, delimiter=";", quoting=csv.QUOTE_MINIMAL,
-                        lineterminator="\r\n")
-    writer.writerow(header)
-    writer.writerows(rows)
-    data = "﻿" + buffer.getvalue()
-    stamp = datetime.now().strftime("%Y%m%d-%H%M")
-    return Response(
-        data,
-        mimetype="text/csv; charset=utf-8",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}-{stamp}.csv"'
-        },
-    )
 
 
 def _fmt(value) -> str:
@@ -1231,6 +1234,95 @@ def _apply_server_form(form, server) -> None:
     server.is_active = form.is_active.data
 
 
+def _siem_form_from_settings() -> SiemSettingsForm:
+    return SiemSettingsForm(
+        base_url=get_setting(KEY_SIEM_URL),
+        auth_mode=get_setting(KEY_SIEM_AUTH_MODE, "session"),
+        auth_type=get_setting(KEY_SIEM_AUTH_TYPE, "local"),
+        username=get_setting(KEY_SIEM_USERNAME),
+        client_id=get_setting(KEY_SIEM_CLIENT_ID, "mpx"),
+        verify_ssl=get_bool(KEY_SIEM_VERIFY, False),
+        filter_template=get_setting(KEY_SIEM_FILTER, DEFAULT_SIEM_FILTER),
+        group_field=get_setting(KEY_SIEM_GROUP_FIELD, DEFAULT_SIEM_GROUP_FIELD),
+        window_hours=get_int(KEY_SIEM_WINDOW, 24 * 7),
+        limit=get_int(KEY_SIEM_LIMIT, 500),
+    )
+
+
+def _skydns_form_from_settings() -> SkydnsSettingsForm:
+    from ..services.skydns_client import DEFAULT_BASE_URL, DEFAULT_STATS_PATH
+
+    return SkydnsSettingsForm(
+        base_url=get_setting(KEY_SKYDNS_URL, DEFAULT_BASE_URL),
+        stats_path=get_setting(KEY_SKYDNS_STATS_PATH, DEFAULT_STATS_PATH),
+        login=get_setting(KEY_SKYDNS_LOGIN),
+        profile=get_setting(KEY_SKYDNS_PROFILE),
+        days=get_int(KEY_SKYDNS_DAYS, 7),
+        verify_ssl=get_bool(KEY_SKYDNS_VERIFY, True),
+        categories=get_setting(KEY_SKYDNS_CATEGORIES, DEFAULT_SKYDNS_CATEGORIES),
+        field_map=get_setting(KEY_SKYDNS_MAP),
+    )
+
+
+def _save_siem_settings(form: SiemSettingsForm) -> None:
+    set_setting(KEY_SIEM_URL, (form.base_url.data or "").strip())
+    set_setting(KEY_SIEM_AUTH_MODE, form.auth_mode.data or "session")
+    set_setting(KEY_SIEM_AUTH_TYPE, form.auth_type.data or "local")
+    set_setting(KEY_SIEM_USERNAME, (form.username.data or "").strip())
+    set_setting(KEY_SIEM_CLIENT_ID, (form.client_id.data or "").strip())
+    set_setting(KEY_SIEM_VERIFY, "1" if form.verify_ssl.data else "0")
+    set_setting(
+        KEY_SIEM_FILTER, (form.filter_template.data or DEFAULT_SIEM_FILTER).strip()
+    )
+    set_setting(
+        KEY_SIEM_GROUP_FIELD,
+        (form.group_field.data or DEFAULT_SIEM_GROUP_FIELD).strip(),
+    )
+    if form.window_hours.data:
+        set_setting(KEY_SIEM_WINDOW, str(form.window_hours.data))
+    if form.limit.data:
+        set_setting(KEY_SIEM_LIMIT, str(form.limit.data))
+    # Пароли перезаписываются, только если их ввели заново.
+    if form.password.data:
+        set_setting(KEY_SIEM_PASSWORD, form.password.data, is_secret=True)
+    if form.client_secret.data:
+        set_setting(KEY_SIEM_CLIENT_SECRET, form.client_secret.data, is_secret=True)
+
+
+def _save_skydns_settings(form: SkydnsSettingsForm) -> None:
+    set_setting(KEY_SKYDNS_URL, (form.base_url.data or "").strip())
+    set_setting(KEY_SKYDNS_STATS_PATH, (form.stats_path.data or "").strip())
+    set_setting(KEY_SKYDNS_LOGIN, (form.login.data or "").strip())
+    set_setting(KEY_SKYDNS_PROFILE, (form.profile.data or "").strip())
+    set_setting(KEY_SKYDNS_VERIFY, "1" if form.verify_ssl.data else "0")
+    set_setting(KEY_SKYDNS_CATEGORIES, form.categories.data or "")
+    set_setting(KEY_SKYDNS_MAP, (form.field_map.data or "").strip())
+    if form.days.data:
+        set_setting(KEY_SKYDNS_DAYS, str(form.days.data))
+    if form.password.data:
+        set_setting(KEY_SKYDNS_PASSWORD, form.password.data, is_secret=True)
+    if form.token.data:
+        set_setting(KEY_SKYDNS_TOKEN, form.token.data.strip(), is_secret=True)
+
+
+def _test_siem() -> None:
+    """Проверить вход в SIEM без выполнения поискового запроса."""
+    from ..services.siem_client import SiemClient, SiemError
+
+    try:
+        client = SiemClient(load_siem_config())
+        client.login()
+        client.close()
+    except SiemError as exc:
+        flash(str(exc), "danger")
+        return
+    except Exception as exc:  # noqa: BLE001
+        current_app.logger.exception("Ошибка проверки подключения к SIEM")
+        flash(f"Непредвиденная ошибка проверки SIEM: {exc}", "danger")
+        return
+    flash("Подключение к MaxPatrol SIEM успешно: вход выполнен.", "success")
+
+
 @main_bp.route("/settings", methods=["GET", "POST"])
 @operator_required
 def settings():
@@ -1241,11 +1333,19 @@ def settings():
     app_form = AppSettingsForm(
         protected_domains=get_setting(KEY_PROTECTED)
     )
+    siem_form = _siem_form_from_settings()
+    skydns_form = _skydns_form_from_settings()
 
     def _render():
         return render_template(
             "settings.html", form=form, app_form=app_form, server=server,
+            siem_form=siem_form, skydns_form=skydns_form,
             vt_configured=bool(get_vt_key()),
+            siem_password_set=bool(get_setting(KEY_SIEM_PASSWORD)),
+            skydns_password_set=bool(
+                get_setting(KEY_SKYDNS_PASSWORD) or get_setting(KEY_SKYDNS_TOKEN)
+            ),
+            siem_filter_default=DEFAULT_SIEM_FILTER,
         )
 
     # Вторая форма на странице: ключ VirusTotal и защищённые домены.
@@ -1255,6 +1355,24 @@ def settings():
         set_setting(KEY_PROTECTED, app_form.protected_domains.data or "")
         db.session.commit()
         flash("Настройки приложения сохранены.", "success")
+        return redirect(url_for("main.settings"))
+
+    # Подключение к MaxPatrol SIEM: сохранение и проверка входа.
+    if (siem_form.submit_siem.data or siem_form.test_siem.data) \
+            and siem_form.validate_on_submit():
+        _save_siem_settings(siem_form)
+        db.session.commit()
+        if siem_form.test_siem.data:
+            _test_siem()
+            return _render()
+        flash("Настройки MaxPatrol SIEM сохранены.", "success")
+        return redirect(url_for("main.settings"))
+
+    # Подключение к SkyDNS.
+    if skydns_form.submit_skydns.data and skydns_form.validate_on_submit():
+        _save_skydns_settings(skydns_form)
+        db.session.commit()
+        flash("Настройки SkyDNS сохранены.", "success")
         return redirect(url_for("main.settings"))
 
     if form.submit.data or form.test.data:

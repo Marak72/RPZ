@@ -94,7 +94,8 @@
           </td>
           <td>{% include "_vt_badge.html" %}</td>
           <td class="muted text-xs">
-            {% if it.source == 'manual' %}<span class="badge badge--neutral">вручную</span>
+            {% if it.source == 'skydns' %}<span class="badge badge--warning">SkyDNS</span>
+            {% elif it.source == 'manual' %}<span class="badge badge--neutral">вручную</span>
             {% elif it.document %}<a href="{{ url_for('main.document_view', doc_id=it.document.id) }}">{{ it.document.filename }}</a>
             {% else %}—{% endif %}
           </td>

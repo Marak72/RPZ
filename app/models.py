@@ -21,6 +21,30 @@ PUSH_FAILED = "failed"
 PUSH_DRY_RUN = "dry_run"
 PUSH_ROLLED_BACK = "rolled_back"
 
+# Статусы разбора обращения на вредоносный домен (сервис SkyDNS).
+THREAT_NEW = "new"                # только что приехал из SkyDNS, не разбирали
+THREAT_INVESTIGATING = "working"  # ищем хосты / разбираемся
+THREAT_BLOCKED = "blocked"        # отправлен в блокировку RPZ
+THREAT_FALSE_POSITIVE = "fp"      # ложное срабатывание, категория неверна
+THREAT_CLOSED = "closed"          # разобрано, действий не требуется
+
+THREAT_STATUSES = (
+    (THREAT_NEW, "новый"),
+    (THREAT_INVESTIGATING, "в работе"),
+    (THREAT_BLOCKED, "заблокирован"),
+    (THREAT_FALSE_POSITIVE, "ложное"),
+    (THREAT_CLOSED, "закрыт"),
+)
+
+# Откуда приехала запись об угрозе.
+THREAT_SOURCE_API = "api"     # автоматическая выгрузка из API SkyDNS
+THREAT_SOURCE_CSV = "csv"     # импорт выгрузки из личного кабинета
+THREAT_SOURCE_MANUAL = "manual"
+
+# Результаты обращений к внешним системам (SkyDNS, SIEM).
+JOB_SUCCESS = "success"
+JOB_FAILED = "failed"
+
 
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -310,6 +334,151 @@ class PushLog(db.Model):
 
     def __repr__(self) -> str:
         return f"<PushLog {self.id} {self.status} ({self.entries_count})>"
+
+
+class ThreatDomain(db.Model):
+    """Домен «опасной» категории, на который обращались из организации.
+
+    Приезжает из статистики SkyDNS (или импортом CSV). Дальше по домену
+    выполняется запрос в MaxPatrol SIEM, который отвечает на главный вопрос:
+    какие именно конечные хосты организации туда ходили.
+    """
+
+    __tablename__ = "threat_domains"
+
+    id = db.Column(db.Integer, primary_key=True)
+    domain = db.Column(db.String(500), unique=True, nullable=False, index=True)
+    # Категория SkyDNS (как её вернул API) и её человекочитаемое название.
+    category = db.Column(db.String(120), nullable=False, default="", index=True)
+    category_title = db.Column(db.String(200), nullable=False, default="")
+    # Профиль/подразделение SkyDNS, в статистике которого встретился домен.
+    profile = db.Column(db.String(200), nullable=False, default="")
+
+    requests_count = db.Column(db.Integer, nullable=False, default=0)
+    blocks_count = db.Column(db.Integer, nullable=False, default=0)
+
+    first_seen = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    last_seen = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    status = db.Column(db.String(20), nullable=False, default=THREAT_NEW, index=True)
+    source = db.Column(db.String(20), nullable=False, default=THREAT_SOURCE_API)
+    notes = db.Column(db.Text, default="")
+
+    # Когда последний раз ходили в SIEM за конечными хостами.
+    siem_checked_at = db.Column(db.DateTime)
+    siem_hosts_count = db.Column(db.Integer, nullable=False, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    added_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    hosts = db.relationship(
+        "ThreatHost",
+        backref="threat",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    @property
+    def vt(self):
+        """Отчёт VirusTotal для этого домена (общий с сервисом ФСТЭК)."""
+        return VtReport.query.filter_by(value=self.domain).first()
+
+    @property
+    def block_entry(self):
+        """Запись в кандидатах на блокировку RPZ, если домен уже отправлен туда."""
+        return BlockEntry.query.filter_by(value=self.domain).first()
+
+    @property
+    def status_title(self) -> str:
+        return dict(THREAT_STATUSES).get(self.status, self.status)
+
+    def __repr__(self) -> str:
+        return f"<ThreatDomain {self.domain} ({self.category})>"
+
+
+class ThreatHost(db.Model):
+    """Конечный хост организации, обращавшийся к вредоносному домену.
+
+    Заполняется из ответа MaxPatrol SIEM: группировка событий по полю
+    ``dst.host`` даёт список адресов, а счётчик — количество событий.
+    """
+
+    __tablename__ = "threat_hosts"
+    __table_args__ = (
+        db.UniqueConstraint("threat_id", "address", name="uq_threat_host"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    threat_id = db.Column(
+        db.Integer, db.ForeignKey("threat_domains.id"), nullable=False, index=True
+    )
+    # Значение поля группировки: как правило IP-адрес, иногда имя хоста.
+    address = db.Column(db.String(255), nullable=False, index=True)
+    hostname = db.Column(db.String(255), nullable=False, default="")
+    events_count = db.Column(db.Integer, nullable=False, default=0)
+    first_seen = db.Column(db.DateTime)
+    last_seen = db.Column(db.DateTime)
+    found_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    @property
+    def is_ip(self) -> bool:
+        parts = (self.address or "").split(".")
+        return len(parts) == 4 and all(
+            p.isdigit() and 0 <= int(p) <= 255 for p in parts
+        )
+
+    def __repr__(self) -> str:
+        return f"<ThreatHost {self.address} ({self.events_count})>"
+
+
+class SiemQueryLog(db.Model):
+    """Журнал обращений к MaxPatrol SIEM за конечными хостами."""
+
+    __tablename__ = "siem_query_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    threat_id = db.Column(db.Integer, db.ForeignKey("threat_domains.id"), index=True)
+    domain = db.Column(db.String(500), nullable=False, default="")
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    finished_at = db.Column(db.DateTime)
+    status = db.Column(db.String(20), nullable=False, default=JOB_SUCCESS)
+    hosts_found = db.Column(db.Integer, nullable=False, default=0)
+    events_total = db.Column(db.Integer, nullable=False, default=0)
+    # Фильтр, который реально ушёл в SIEM — чтобы можно было повторить руками.
+    query_filter = db.Column(db.Text, default="")
+    period_from = db.Column(db.DateTime)
+    period_to = db.Column(db.DateTime)
+    message = db.Column(db.Text, default="")
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    user = db.relationship("User")
+    threat = db.relationship("ThreatDomain")
+
+    def __repr__(self) -> str:
+        return f"<SiemQueryLog {self.domain} {self.status} ({self.hosts_found})>"
+
+
+class SkydnsSyncLog(db.Model):
+    """Журнал выгрузок статистики из SkyDNS."""
+
+    __tablename__ = "skydns_sync_logs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    started_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    finished_at = db.Column(db.DateTime)
+    status = db.Column(db.String(20), nullable=False, default=JOB_SUCCESS)
+    source = db.Column(db.String(20), nullable=False, default=THREAT_SOURCE_API)
+    period_from = db.Column(db.Date)
+    period_to = db.Column(db.Date)
+    domains_total = db.Column(db.Integer, nullable=False, default=0)
+    domains_new = db.Column(db.Integer, nullable=False, default=0)
+    message = db.Column(db.Text, default="")
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    user = db.relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<SkydnsSyncLog {self.started_at} {self.status}>"
 
 
 class IocHash(db.Model):

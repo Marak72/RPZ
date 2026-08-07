@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Дашборд{% endblock %}
+{% block subheading %}<div class="topbar__sub">Обращения на вредоносные ресурсы</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Обзор угроз</h2>
+    <p>Домены опасных категорий из статистики SkyDNS и конечные хосты организации,
+       найденные по ним в MaxPatrol SIEM.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('skydns.domains_csv') }}">{{ ico.icon('download') }} Экспорт CSV</a>
+    {% if current_user.is_operator %}
+    <form method="post" action="{{ url_for('skydns.lookup_batch') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn" title="Найти хосты для непроверенных доменов">
+        {{ ico.icon('search') }} Проверить в SIEM
+      </button>
+    </form>
+    <a class="btn btn--primary" href="{{ url_for('skydns.sync') }}">
+      {{ ico.icon('download') }} Загрузить статистику
+    </a>
+    {% endif %}
+  </div>
+</div>
+
+{% if not siem_configured and current_user.is_operator %}
+<div class="alert alert--warning">
+  {{ ico.icon('alert') }}
+  <div class="alert__text">MaxPatrol SIEM не настроен — поиск конечных хостов недоступен.</div>
+  <a class="btn btn--sm" href="{{ url_for('main.settings') }}">Настроить</a>
+</div>
+{% endif %}
+
+{% if stats.unchecked %}
+<div class="alert alert--info">
+  {{ ico.icon('info') }}
+  <div class="alert__text"><strong>{{ stats.unchecked }}</strong>
+    {{ 'домен ещё не проверен' if stats.unchecked == 1 else 'доменов ещё не проверены' }} в SIEM —
+    неизвестно, кто из хостов туда обращался.</div>
+  <a class="btn btn--sm" href="{{ url_for('skydns.domains') }}">К списку</a>
+</div>
+{% endif %}
+
+<div class="grid grid--stats" style="margin-bottom:1rem">
+  <a class="stat stat--danger" href="{{ url_for('skydns.domains') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('globe') }}</span>
+      <span class="stat__label">Опасных доменов</span>
+    </div>
+    <div class="stat__value">{{ stats.threats }}</div>
+    <div class="stat__hint">категории безопасности SkyDNS</div>
+  </a>
+
+  <a class="stat stat--warning" href="{{ url_for('skydns.domains', status='new') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('alert') }}</span>
+      <span class="stat__label">Не разобрано</span>
+    </div>
+    <div class="stat__value">{{ stats.new }}</div>
+    <div class="stat__hint">ожидают анализа</div>
+  </a>
+
+  <a class="stat stat--info" href="{{ url_for('skydns.hosts') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('server') }}</span>
+      <span class="stat__label">Конечных хостов</span>
+    </div>
+    <div class="stat__value">{{ stats.hosts }}</div>
+    <div class="stat__hint">найдено в SIEM</div>
+  </a>
+
+  <a class="stat stat--success" href="{{ url_for('skydns.domains', status='blocked') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('lock') }}</span>
+      <span class="stat__label">Отправлено в RPZ</span>
+    </div>
+    <div class="stat__value">{{ stats.blocked }}</div>
+    <div class="stat__hint">блокировка на DNS</div>
+  </a>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('server') }}<span class="card__title">Самые «шумные» хосты</span>
+      <a class="btn btn--ghost btn--sm" style="margin-left:auto" href="{{ url_for('skydns.hosts') }}">Все хосты</a>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if top_hosts %}
+      <table class="table">
+        <tbody>
+          {% for row in top_hosts %}
+          <tr>
+            <td class="value">
+              <a href="{{ url_for('skydns.host_view', address=row.address) }}">{{ row.address }}</a>
+            </td>
+            <td class="num nowrap">
+              <span class="badge badge--danger">{{ row.domains }} дом.</span>
+              <span class="text-xs muted">{{ row.events or 0 }} соб.</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('server') }}
+        <div class="empty__title">Хосты ещё не найдены</div>
+        <div class="empty__text">Загрузите статистику SkyDNS и запустите проверку в SIEM.</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('hash') }}<span class="card__title">Категории</span>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if top_categories %}
+      <table class="table">
+        <tbody>
+          {% for cat, cnt in top_categories %}
+          <tr>
+            <td>
+              <a href="{{ url_for('skydns.domains', category=cat) }}">{{ cat or 'без категории' }}</a>
+            </td>
+            <td class="num nowrap"><span class="badge badge--neutral">{{ cnt }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('hash') }}
+        <div class="empty__title">Данных пока нет</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('globe') }}<span class="card__title">Последние домены</span>
+      <a class="btn btn--ghost btn--sm" style="margin-left:auto" href="{{ url_for('skydns.domains') }}">Все домены</a>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if recent_threats %}
+      <table class="table">
+        <tbody>
+          {% for t in recent_threats %}
+          <tr>
+            <td class="value">
+              <a href="{{ url_for('skydns.threat_view', threat_id=t.id) }}">{{ t.domain }}</a>
+              <div class="text-xs muted">{{ t.category_title or t.category or '—' }}</div>
+            </td>
+            <td class="num nowrap">
+              {% with st = t.status %}{% include "skydns/_status.html" %}{% endwith %}
+              {% if t.siem_hosts_count %}
+              <span class="badge badge--info">{{ t.siem_hosts_count }} хост.</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('globe') }}
+        <div class="empty__title">Доменов пока нет</div>
+        {% if current_user.is_operator %}
+        <div class="empty__text">Загрузите статистику из SkyDNS или импортируйте выгрузку CSV.</div>
+        <a class="btn btn--primary btn--sm" href="{{ url_for('skydns.sync') }}">
+          {{ ico.icon('download') }} Загрузить статистику</a>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('clock') }}<span class="card__title">Последние загрузки</span>
+      <a class="btn btn--ghost btn--sm" style="margin-left:auto" href="{{ url_for('skydns.logs') }}">Журнал</a>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if recent_syncs %}
+      <table class="table">
+        <tbody>
+          {% for s in recent_syncs %}
+          <tr>
+            <td>
+              <div class="inline">
+                {% if s.status == 'success' %}<span class="badge badge--success">успешно</span>
+                {% else %}<span class="badge badge--danger">ошибка</span>{% endif %}
+                <span class="text-xs">{{ 'API' if s.source == 'api' else ('CSV' if s.source == 'csv' else 'вручную') }}</span>
+              </div>
+              <div class="text-xs muted">
+                {{ s.started_at.strftime('%d.%m.%Y %H:%M') }} · {{ s.user.username if s.user else '—' }}
+              </div>
+            </td>
+            <td class="num nowrap">
+              <span class="badge badge--neutral">{{ s.domains_total }} / +{{ s.domains_new }}</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('clock') }}
+        <div class="empty__title">Загрузок ещё не было</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

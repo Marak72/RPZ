@@ -159,6 +159,37 @@ code, .mono { font-family: var(--font-mono); font-size: .8125rem; }
   color: var(--sidebar-muted); letter-spacing: .02em;
 }
 
+/* Переключатель сервисов портала — верхний уровень навигации. */
+.switcher { padding: .75rem .625rem .5rem; border-bottom: 1px solid var(--sidebar-border); }
+.switcher__title {
+  padding: 0 .5rem .375rem;
+  font-size: .6875rem; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--sidebar-muted);
+}
+.switcher__item {
+  display: flex; align-items: center; gap: .625rem;
+  padding: .5rem .5rem;
+  margin-bottom: .1875rem;
+  border-radius: var(--radius-sm);
+  color: var(--sidebar-text); text-decoration: none;
+  border: 1px solid transparent;
+  transition: background .12s, border-color .12s;
+}
+.switcher__item:hover { background: var(--sidebar-active-bg); color: #fff; text-decoration: none; }
+.switcher__item.is-active {
+  background: var(--sidebar-active-bg);
+  border-color: rgba(59, 130, 246, .45);
+  color: #fff;
+}
+.switcher__item .icon { color: var(--sidebar-muted); }
+.switcher__item.is-active .icon { color: #38bdf8; }
+.switcher__text { font-size: .8125rem; font-weight: 550; line-height: 1.3; min-width: 0; }
+.switcher__text small {
+  display: block; font-weight: 400; font-size: .6875rem;
+  color: var(--sidebar-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 .sidebar__nav { padding: .75rem 0 1.5rem; flex: 1; }
 
 .nav-group { margin-bottom: .25rem; }

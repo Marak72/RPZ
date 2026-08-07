@@ -1,0 +1,7 @@
+{# Бейдж статуса разбора угрозы. Ожидает переменную `st` (строка статуса). #}
+{% if st == 'new' %}<span class="badge badge--warning">новый</span>
+{% elif st == 'working' %}<span class="badge badge--info">в работе</span>
+{% elif st == 'blocked' %}<span class="badge badge--success">заблокирован</span>
+{% elif st == 'fp' %}<span class="badge badge--neutral">ложное</span>
+{% elif st == 'closed' %}<span class="badge badge--neutral">закрыт</span>
+{% else %}<span class="badge badge--neutral">{{ st }}</span>{% endif %}

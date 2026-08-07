@@ -33,13 +33,30 @@ def create_app(config_class: type = Config) -> Flask:
 
     from .auth.routes import auth_bp
     from .main.routes import main_bp
+    from .skydns.routes import skydns_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(main_bp)
+    app.register_blueprint(skydns_bp)
 
+    _register_portal_context(app)
     _register_error_handlers(app)
     _register_cli(app)
     return app
+
+
+def _register_portal_context(app: Flask) -> None:
+    """Отдать шаблонам список сервисов портала и активную вкладку."""
+    from flask import request
+
+    from .portal import SERVICES, service_by_blueprint
+
+    @app.context_processor
+    def inject_services():
+        return {
+            "services": SERVICES,
+            "active_service": service_by_blueprint(request.blueprint),
+        }
 
 
 def _register_error_handlers(app: Flask) -> None:

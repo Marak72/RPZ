@@ -130,7 +130,8 @@
             </td>
             <td class="muted nowrap text-xs">{{ r.pushed_at.strftime('%d.%m.%Y %H:%M') if r.pushed_at else '—' }}</td>
             <td class="muted text-xs">
-              {% if r.source == 'manual' %}вручную
+              {% if r.source == 'skydns' %}SkyDNS
+              {% elif r.source == 'manual' %}вручную
               {% elif r.source == 'zone' %}—
               {% else %}{{ r.document or '—' }}{% endif %}
             </td>

@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Опасные домены{% endblock %}
+{% block subheading %}<div class="topbar__sub">Категории безопасности SkyDNS</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Опасные домены</h2>
+    <p>Домены, на которые обращались из организации. Проверка в SIEM показывает,
+       какие именно конечные хосты туда ходили.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('skydns.domains_csv', **request.args) }}">
+      {{ ico.icon('download') }} Экспорт CSV</a>
+    {% if current_user.is_operator %}
+    <a class="btn" href="{{ url_for('skydns.sync') }}">{{ ico.icon('upload') }} Загрузить статистику</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="tabs">
+  <a class="tab {% if not status %}is-active{% endif %}"
+     href="{{ url_for('skydns.domains', q=q, category=category) }}">Все</a>
+  {% for code, title in statuses %}
+  <a class="tab {% if status == code %}is-active{% endif %}"
+     href="{{ url_for('skydns.domains', status=code, q=q, category=category) }}">{{ title }}</a>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      {% if status %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по домену" data-search-focus>
+      </div>
+      <select name="category" class="input--auto" onchange="this.form.submit()">
+        <option value="">Все категории</option>
+        {% for cat in categories %}
+        <option value="{{ cat }}" {% if category == cat %}selected{% endif %}>{{ cat }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn--sm">Применить</button>
+      {% if q or category or status %}
+      <a class="btn btn--ghost btn--sm" href="{{ url_for('skydns.domains') }}">Сбросить</a>
+      {% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="threatTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+    </button>
+  </div>
+
+<form method="post" action="{{ url_for('skydns.lookup_batch') }}" data-select-scope>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="table-wrap">
+    <table class="table" id="threatTable">
+      <thead>
+        <tr>
+          {% if current_user.is_operator %}
+          <th class="col-check">
+            <input type="checkbox" data-select-all="threat" title="Выбрать все">
+          </th>
+          {% endif %}
+          <th>Домен</th><th>Категория</th><th>Статус</th>
+          <th class="num">Обращений</th><th class="num">Хостов</th>
+          <th>VT</th><th>Проверен в SIEM</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          {% if current_user.is_operator %}
+          <td class="col-check">
+            <input type="checkbox" name="threat_id" value="{{ it.id }}" data-select="threat">
+          </td>
+          {% endif %}
+          <td class="value" data-value="{{ it.domain }}">
+            <a href="{{ url_for('skydns.threat_view', threat_id=it.id) }}">{{ it.domain }}</a>
+            <button type="button" class="copy-btn" data-copy="{{ it.domain }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td class="text-xs">{{ it.category_title or it.category or '—' }}</td>
+          <td>{% with st = it.status %}{% include "skydns/_status.html" %}{% endwith %}</td>
+          <td class="num">{{ it.requests_count or '—' }}</td>
+          <td class="num">
+            {% if it.siem_hosts_count %}
+            <span class="badge badge--danger">{{ it.siem_hosts_count }}</span>
+            {% elif it.siem_checked_at %}<span class="text-xs muted">нет</span>
+            {% else %}<span class="text-xs muted">—</span>{% endif %}
+          </td>
+          <td>{% include "_vt_badge.html" %}</td>
+          <td class="muted nowrap text-xs">
+            {{ it.siem_checked_at.strftime('%d.%m.%Y %H:%M') if it.siem_checked_at else 'не проверялся' }}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="{{ 8 if current_user.is_operator else 7 }}">
+            <div class="empty">
+              {{ ico.icon('search') }}
+              <div class="empty__title">Ничего не найдено</div>
+              <div class="empty__text">
+                {% if q or status or category %}Измените условия фильтра.
+                {% else %}Загрузите статистику из SkyDNS, чтобы появились домены.{% endif %}
+              </div>
+              {% if current_user.is_operator and not (q or status or category) %}
+              <a class="btn btn--primary btn--sm" href="{{ url_for('skydns.sync') }}">
+                {{ ico.icon('download') }} Загрузить статистику</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if current_user.is_operator and items %}
+  <div class="selection-bar">
+    {{ ico.icon('search') }}
+    <span>Выбрано: <strong data-selected-count>0</strong></span>
+    <button class="btn btn--sm btn--primary">Найти хосты в SIEM</button>
+    <span class="text-xs muted">
+      Без выбора проверяются домены, которые ещё ни разу не проверялись.
+    </span>
+  </div>
+  {% endif %}
+</form>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

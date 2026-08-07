@@ -1,0 +1,511 @@
+"""Клиент MaxPatrol SIEM: по домену находит конечные хосты организации.
+
+Зачем нужен. SkyDNS показывает, что из организации ходили на вредоносный
+домен, но не показывает, кто именно: в облако прилетает адрес шлюза. Ответ
+знает SIEM — в нём лежат события DNS/прокси, где рядом с доменом есть
+конечный хост. Клиент повторяет ровно тот запрос, который оператор делает
+руками в интерфейсе SIEM:
+
+    фильтр:       datafield1 = "<домен>" or datafield3 = "<домен>"
+    группировка:  dst.host
+
+и возвращает значения группировки (обычно IP-адреса) со счётчиком событий.
+
+Реализация — только на стандартной библиотеке, как и vt_client: приложение
+должно ставиться в изолированной сети без доступа к PyPI.
+
+Поддерживаются два способа аутентификации, оба встречаются в инсталляциях
+MaxPatrol SIEM:
+
+  * ``session`` — форма ``/ui/login`` на порту Core (3334) с последующим
+    OIDC form-post редиректом; авторизация живёт в cookie;
+  * ``token``   — OAuth2 password grant на ``/connect/token`` порта Core;
+    авторизация передаётся заголовком ``Authorization: Bearer``.
+"""
+from __future__ import annotations
+
+import html
+import json
+import re
+import socket
+import ssl
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass, field
+from datetime import datetime
+from http.cookiejar import CookieJar
+
+# Порт компонента Core, на котором висят форма входа и выдача токенов.
+CORE_PORT = 3334
+
+# Пути API MaxPatrol SIEM.
+PATH_UI_LOGIN = "/ui/login"
+PATH_LOGIN_FORM = "/account/login?returnUrl=/"
+PATH_TOKEN = "/connect/token"
+PATH_SYSTEM_INFO = "/api/deployment_configuration/v1/system_info"
+PATH_EVENTS = "/api/events/v2/events"
+
+# Типы аутентификации формы /ui/login.
+AUTH_TYPE_LOCAL = 0
+AUTH_TYPE_LDAP = 1
+
+# Скоупы, которые запрашивает веб-интерфейс SIEM при password grant.
+TOKEN_SCOPE = "authorization offline_access mpx.api ptkb.api"
+DEFAULT_CLIENT_ID = "mpx"
+
+USER_AGENT = "rpz-portal/1.0"
+
+
+class SiemError(Exception):
+    """Ошибка обращения к SIEM, пригодная для показа оператору."""
+
+
+class SiemAuthError(SiemError):
+    """Не удалось аутентифицироваться (неверная УЗ, истёк пароль)."""
+
+
+@dataclass
+class SiemConfig:
+    """Параметры подключения к SIEM (берутся из настроек приложения)."""
+
+    base_url: str = ""
+    auth_mode: str = "session"          # session | token
+    auth_type: str = "local"            # local | ldap (только для session)
+    username: str = ""
+    password: str = ""
+    client_id: str = DEFAULT_CLIENT_ID
+    client_secret: str = ""
+    verify_ssl: bool = False
+    timeout: int = 30
+    limit: int = 500
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.base_url and self.username and self.password)
+
+
+@dataclass
+class HostHit:
+    """Одна строка сгруппированного ответа SIEM."""
+
+    address: str
+    events_count: int = 0
+    hostname: str = ""
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+
+
+@dataclass
+class SearchResult:
+    hosts: list[HostHit] = field(default_factory=list)
+    total_count: int = 0
+    query_filter: str = ""
+
+
+def _normalize_base(base_url: str) -> str:
+    """Привести адрес SIEM к виду ``https://host`` без хвостового слэша."""
+    base = (base_url or "").strip().rstrip("/")
+    if not base:
+        raise SiemError("Не задан адрес MaxPatrol SIEM — укажите его в настройках.")
+    if not base.startswith(("http://", "https://")):
+        base = "https://" + base
+    return base
+
+
+def _core_url(base_url: str, path: str) -> str:
+    """URL компонента Core: тот же хост, но порт 3334.
+
+    Если в настройках порт указали явно, он считается осознанным выбором
+    и не подменяется.
+    """
+    parts = urllib.parse.urlsplit(_normalize_base(base_url))
+    netloc = parts.netloc if parts.port else f"{parts.netloc}:{CORE_PORT}"
+    return urllib.parse.urlunsplit((parts.scheme, netloc, path, "", ""))
+
+
+def _api_url(base_url: str, path: str, query: str = "") -> str:
+    parts = urllib.parse.urlsplit(_normalize_base(base_url))
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc, path, query, ""))
+
+
+def _ssl_context(verify: bool) -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    if not verify:
+        # В большинстве инсталляций у SIEM самоподписанный сертификат.
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def _to_unix_ms(moment: datetime) -> int:
+    return int(moment.timestamp())
+
+
+class SiemClient:
+    """Сессия работы с SIEM. Создаётся на одну серию запросов и закрывается."""
+
+    def __init__(self, config: SiemConfig) -> None:
+        self.config = config
+        self._cookies = CookieJar()
+        self._token = ""
+        self._opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=_ssl_context(config.verify_ssl)),
+            urllib.request.HTTPCookieProcessor(self._cookies),
+            _NoRedirect(),
+        )
+
+    # --- низкий уровень ---------------------------------------------------
+
+    def _request(
+        self,
+        url: str,
+        data: bytes | None = None,
+        headers: dict | None = None,
+        method: str | None = None,
+        allow_redirect: bool = True,
+    ):
+        base_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        if self._token:
+            base_headers["Authorization"] = f"Bearer {self._token}"
+        base_headers.update(headers or {})
+
+        request = urllib.request.Request(
+            url, data=data, headers=base_headers, method=method
+        )
+        try:
+            return self._opener.open(request, timeout=self.config.timeout)
+        except urllib.error.HTTPError as exc:
+            # Редиректы OIDC приходят как HTTPError из-за _NoRedirect.
+            if allow_redirect and exc.code in (301, 302, 303, 307, 308):
+                location = exc.headers.get("Location", "")
+                if location:
+                    return self._request(
+                        urllib.parse.urljoin(url, location),
+                        headers=headers,
+                        allow_redirect=False,
+                    )
+            raise
+        except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
+            raise SiemError(f"Не удалось связаться с SIEM ({url}): {exc}") from exc
+
+    def _read_json(self, response) -> dict:
+        raw = response.read().decode("utf-8", errors="replace")
+        if not raw.strip():
+            return {}
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise SiemError("SIEM вернул ответ, который не удалось разобрать.") from exc
+
+    # --- аутентификация ---------------------------------------------------
+
+    def login(self) -> None:
+        if not self.config.is_configured:
+            raise SiemError(
+                "MaxPatrol SIEM не настроен: укажите адрес, логин и пароль "
+                "в разделе «Настройки»."
+            )
+        if self.config.auth_mode == "token":
+            self._login_token()
+        else:
+            self._login_session()
+
+    def _login_token(self) -> None:
+        """OAuth2 password grant на порту Core."""
+        payload = urllib.parse.urlencode({
+            "client_id": self.config.client_id or DEFAULT_CLIENT_ID,
+            "client_secret": self.config.client_secret,
+            "grant_type": "password",
+            "username": self.config.username,
+            "password": self.config.password,
+            "response_type": "code id_token",
+            "scope": TOKEN_SCOPE,
+        }).encode()
+
+        try:
+            response = self._request(
+                _core_url(self.config.base_url, PATH_TOKEN),
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:400]
+            if exc.code in (400, 401):
+                raise SiemAuthError(
+                    "SIEM отклонил учётные данные при получении токена "
+                    f"({exc.code}). {detail}"
+                ) from exc
+            raise SiemError(f"Ошибка получения токена SIEM ({exc.code}). {detail}") from exc
+
+        payload = self._read_json(response)
+        token = payload.get("access_token") or ""
+        if not token:
+            raise SiemAuthError("SIEM не вернул access_token.")
+        self._token = token
+
+    def _login_session(self) -> None:
+        """Вход через форму /ui/login с последующим OIDC form-post."""
+        auth_type = (
+            AUTH_TYPE_LDAP if self.config.auth_type == "ldap" else AUTH_TYPE_LOCAL
+        )
+        body = json.dumps({
+            "authType": auth_type,
+            "username": self.config.username,
+            "password": self.config.password,
+            "newPassword": None,
+        }).encode()
+
+        try:
+            response = self._request(
+                _core_url(self.config.base_url, PATH_UI_LOGIN),
+                data=body,
+                headers={"Content-Type": "application/json;charset=UTF-8"},
+            )
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:400]
+            raise SiemAuthError(
+                f"SIEM отклонил вход ({exc.code}). {detail}"
+            ) from exc
+
+        payload = self._read_json(response)
+        # При неверном пароле Core отвечает 200 с полем message.
+        if payload.get("message"):
+            raise SiemAuthError(f"SIEM отклонил вход: {payload['message']}")
+
+        # Забираем HTML-форму авторизации и отправляем её — так веб-интерфейс
+        # обменивает сессию Core на cookie основного портала SIEM.
+        form_url = _api_url(self.config.base_url, "/account/login", "returnUrl=/")
+        form_html = self._request(form_url).read().decode("utf-8", errors="replace")
+        action, fields = self._parse_login_form(form_html)
+        if action:
+            self._request(
+                urllib.parse.urljoin(form_url, action),
+                data=urllib.parse.urlencode(fields).encode(),
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+
+        # Контрольный запрос: если сессия не поднялась, дальше нет смысла.
+        try:
+            check = self._request(_api_url(self.config.base_url, PATH_SYSTEM_INFO))
+        except urllib.error.HTTPError as exc:
+            raise SiemAuthError(
+                f"Сессия SIEM не установлена: {PATH_SYSTEM_INFO} вернул {exc.code}."
+            ) from exc
+        if check.status != 200:
+            raise SiemAuthError(
+                f"Сессия SIEM не установлена (код {check.status})."
+            )
+
+    @staticmethod
+    def _parse_login_form(page: str) -> tuple[str, dict]:
+        """Достать action и скрытые поля из HTML-формы авторизации."""
+        action_match = re.search(r"action=['\"]([^'\"]*)['\"]", page)
+        fields = {
+            match.group(1): html.unescape(match.group(2))
+            for match in re.finditer(
+                r"name=['\"]([^'\"]*)['\"]\s+value=['\"]([^'\"]*)['\"]", page
+            )
+        }
+        return (action_match.group(1) if action_match else ""), fields
+
+    # --- поиск ------------------------------------------------------------
+
+    def search_hosts(
+        self,
+        domain: str,
+        time_from: datetime,
+        time_to: datetime,
+        filter_template: str,
+        group_field: str,
+        limit: int | None = None,
+    ) -> SearchResult:
+        """Найти конечные хосты, обращавшиеся к домену.
+
+        Повторяет ручной запрос оператора: фильтр по домену + группировка по
+        полю ``group_field`` (по умолчанию ``dst.host``).
+        """
+        domain = (domain or "").strip().lower()
+        if not domain:
+            raise SiemError("Пустой домен для поиска в SIEM.")
+
+        query_filter = _render_filter(filter_template, domain)
+        limit = limit or self.config.limit
+        body = _build_group_query(
+            query_filter=query_filter,
+            group_field=group_field,
+            time_from=time_from,
+            time_to=time_to,
+        )
+
+        url = _api_url(
+            self.config.base_url,
+            PATH_EVENTS,
+            urllib.parse.urlencode({"limit": limit, "offset": 0}),
+        )
+        try:
+            response = self._request(
+                url,
+                data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json;charset=UTF-8"},
+            )
+        except urllib.error.HTTPError as exc:
+            detail = _extract_error(exc.read().decode("utf-8", errors="replace"))
+            if exc.code in (401, 403):
+                raise SiemAuthError(
+                    f"SIEM отклонил запрос событий ({exc.code}). "
+                    "Проверьте права учётной записи. " + detail
+                ) from exc
+            raise SiemError(
+                f"SIEM вернул ошибку {exc.code} на запрос событий. {detail}"
+            ) from exc
+
+        payload = self._read_json(response)
+        hosts = _parse_group_rows(payload, group_field)
+        return SearchResult(
+            hosts=hosts,
+            total_count=int(payload.get("totalCount") or 0),
+            query_filter=query_filter,
+        )
+
+    def close(self) -> None:
+        self._opener.close()
+
+    def __enter__(self) -> "SiemClient":
+        self.login()
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Отключает автоматические редиректы: OIDC-цепочку ведём вручную."""
+
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+def _render_filter(template: str, domain: str) -> str:
+    """Подставить домен в шаблон фильтра.
+
+    В шаблоне используется плейсхолдер ``{domain}``. Кавычки в домене
+    экранируются — фильтр уходит в SIEM внутри JSON-строки.
+    """
+    safe = domain.replace("\\", "").replace('"', "")
+    if "{domain}" not in template:
+        # Шаблон без плейсхолдера считаем готовым фильтром по этому домену.
+        return template
+    return template.replace("{domain}", safe)
+
+
+def _build_group_query(
+    query_filter: str,
+    group_field: str,
+    time_from: datetime,
+    time_to: datetime,
+) -> dict:
+    """Тело запроса ``/api/events/v2/events`` с группировкой и подсчётом."""
+    return {
+        "filter": {
+            "select": [group_field, "time"],
+            "where": query_filter,
+            "orderBy": [{"field": "time", "sortOrder": "descending"}],
+            "groupBy": [group_field],
+            "aggregateBy": [
+                {"function": "COUNT", "field": group_field, "unique": False}
+            ],
+            "distributeBy": [],
+            "top": None,
+            "aliases": {},
+        },
+        "groupValues": [],
+        "timeFrom": _to_unix_ms(time_from),
+        "timeTo": _to_unix_ms(time_to),
+    }
+
+
+def _extract_error(raw: str) -> str:
+    """Вытащить человекочитаемое сообщение из тела ошибки SIEM."""
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return raw[:300]
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        first = errors[0]
+        if isinstance(first, dict):
+            message = (first.get("error") or {}).get("message")
+            if message:
+                return str(message)
+    return str(payload.get("message") or raw[:300])
+
+
+def _parse_group_rows(payload: dict, group_field: str) -> list[HostHit]:
+    """Разобрать сгруппированный ответ SIEM в список хостов.
+
+    Формат сгруппированного ответа отличается между версиями SIEM, поэтому
+    разбор намеренно терпимый: ищем значение поля группировки и счётчик в
+    нескольких возможных местах строки ответа.
+    """
+    rows = payload.get("events")
+    if not isinstance(rows, list):
+        rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+
+    hits: dict[str, HostHit] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        address = _row_value(row, group_field)
+        if not address:
+            continue
+        count = _row_count(row)
+        hit = hits.get(address)
+        if hit is None:
+            hits[address] = HostHit(address=address, events_count=count)
+        else:
+            hit.events_count += count
+
+    return sorted(hits.values(), key=lambda h: (-h.events_count, h.address))
+
+
+def _row_value(row: dict, group_field: str) -> str:
+    """Значение поля группировки в строке ответа."""
+    # 1. Поле лежит прямо в строке (обычный случай).
+    value = row.get(group_field)
+    if value:
+        return str(value).strip()
+
+    # 2. Строка обёрнута: {"fields": {...}} либо {"event": {...}}.
+    for key in ("fields", "event", "values"):
+        nested = row.get(key)
+        if isinstance(nested, dict) and nested.get(group_field):
+            return str(nested[group_field]).strip()
+
+    # 3. Групповой ответ: {"groupValues": ["10.0.0.5"]} или {"key": ...}.
+    group_values = row.get("groupValues")
+    if isinstance(group_values, list) and group_values:
+        return str(group_values[0]).strip()
+    for key in ("groupValue", "key", "value"):
+        if row.get(key):
+            return str(row[key]).strip()
+    return ""
+
+
+def _row_count(row: dict) -> int:
+    """Счётчик событий в строке сгруппированного ответа."""
+    for key in ("count", "COUNT", "eventsCount", "aggregateValue", "aggregate"):
+        value = row.get(key)
+        if isinstance(value, (int, float)):
+            return int(value)
+        if isinstance(value, str) and value.isdigit():
+            return int(value)
+        if isinstance(value, list) and value:
+            first = value[0]
+            if isinstance(first, (int, float)):
+                return int(first)
+            if isinstance(first, dict):
+                for sub in ("value", "count"):
+                    if isinstance(first.get(sub), (int, float)):
+                        return int(first[sub])
+    return 1

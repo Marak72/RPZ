@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ address }}{% endblock %}
+{% block subheading %}<div class="topbar__sub">Карточка конечного хоста</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2 class="mono">{{ address }}</h2>
+    <p>Вредоносных доменов: {{ rows|length }} · событий в SIEM: {{ total_events }}</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('skydns.hosts') }}">{{ ico.icon('list') }} Ко всем хостам</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__header">
+    {{ ico.icon('globe') }}<span class="card__title">Куда обращался этот хост</span>
+    <div style="margin-left:auto">
+      <button type="button" class="btn btn--sm" data-copy-column="hostDomains">
+        {{ ico.icon('copy') }} <span data-copy-label>Копировать домены</span>
+      </button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="table" id="hostDomains">
+      <thead>
+        <tr>
+          <th>Домен</th><th>Категория</th><th>Статус</th>
+          <th class="num">Событий</th><th>Найден</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for host, threat in rows %}
+        <tr>
+          <td class="value" data-value="{{ threat.domain }}">
+            <a href="{{ url_for('skydns.threat_view', threat_id=threat.id) }}">{{ threat.domain }}</a>
+          </td>
+          <td class="text-xs">{{ threat.category_title or threat.category or '—' }}</td>
+          <td>{% with st = threat.status %}{% include "skydns/_status.html" %}{% endwith %}</td>
+          <td class="num">{{ host.events_count }}</td>
+          <td class="muted nowrap text-xs">
+            {{ host.found_at.strftime('%d.%m.%Y %H:%M') if host.found_at else '—' }}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="5">
+            <div class="empty">
+              {{ ico.icon('globe') }}
+              <div class="empty__title">Обращений не найдено</div>
+              <div class="empty__text">Возможно, записи по этому хосту были удалены.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
