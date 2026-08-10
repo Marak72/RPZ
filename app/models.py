@@ -7,8 +7,15 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from .extensions import db, login_manager
 
 # Роли пользователей.
-ROLE_OPERATOR = "operator"  # полный доступ: загрузка, SSH-обновление, настройки
+ROLE_ADMIN = "admin"        # всё то же, что оператор, плюс управление учётными записями
+ROLE_OPERATOR = "operator"  # изменения в доступных сервисах: загрузка, выгрузка, настройки
 ROLE_MANAGER = "manager"    # только просмотр
+
+ROLES = (
+    (ROLE_ADMIN, "администратор"),
+    (ROLE_OPERATOR, "оператор"),
+    (ROLE_MANAGER, "просмотр"),
+)
 
 # Статусы кандидатов из писем ФСТЭК.
 STATUS_NEW = "new"        # распознан, ещё не выгружен на сервер
@@ -64,6 +71,22 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), nullable=False, default=ROLE_OPERATOR)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+    # Реквизиты сотрудника — чтобы в журналах было видно живого человека.
+    full_name = db.Column(db.String(200), nullable=False, default="")
+    email = db.Column(db.String(200), nullable=False, default="")
+    position = db.Column(db.String(200), nullable=False, default="")
+    # Отключённая учётная запись остаётся в базе (на неё ссылаются журналы),
+    # но войти по ней нельзя.
+    is_enabled = db.Column(db.Boolean, nullable=False, default=True)
+    last_login_at = db.Column(db.DateTime)
+
+    grants = db.relationship(
+        "UserService",
+        backref="user",
+        cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)
 
@@ -71,11 +94,61 @@ class User(UserMixin, db.Model):
         return check_password_hash(self.password_hash, password)
 
     @property
+    def is_admin(self) -> bool:
+        return self.role == ROLE_ADMIN
+
+    @property
     def is_operator(self) -> bool:
-        return self.role == ROLE_OPERATOR
+        """Может ли менять данные. Администратор — тоже оператор."""
+        return self.role in (ROLE_OPERATOR, ROLE_ADMIN)
+
+    @property
+    def is_active(self) -> bool:
+        """Flask-Login не пускает неактивных пользователей."""
+        return bool(self.is_enabled)
+
+    @property
+    def role_title(self) -> str:
+        return dict(ROLES).get(self.role, self.role)
+
+    @property
+    def display_name(self) -> str:
+        return self.full_name or self.username
+
+    def allowed_services(self) -> set:
+        """ID сервисов, доступных пользователю."""
+        return {g.service_id for g in self.grants}
+
+    def can_use(self, service_id: str) -> bool:
+        """Виден ли пользователю сервис. Администратору доступно всё."""
+        if self.is_admin:
+            return True
+        return service_id in self.allowed_services()
 
     def __repr__(self) -> str:
         return f"<User {self.username} ({self.role})>"
+
+
+class UserService(db.Model):
+    """Доступ учётной записи к сервису портала.
+
+    Права выдаёт администратор: у сотрудника в боковой панели видны только
+    разрешённые сервисы, а их страницы закрыты на уровне blueprint.
+    """
+
+    __tablename__ = "user_services"
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "service_id", name="uq_user_service"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False,
+                        index=True)
+    service_id = db.Column(db.String(40), nullable=False, index=True)
+    granted_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self) -> str:
+        return f"<UserService {self.user_id} -> {self.service_id}>"
 
 
 class SshServer(db.Model):

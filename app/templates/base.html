@@ -64,13 +64,20 @@
         <span data-theme-icon="dark" class="hidden">{{ ico.icon('sun') }}</span>
       </button>
 
-      <div class="user-chip">
-        <span class="user-chip__avatar">{{ current_user.username[0] }}</span>
+      {% if current_user.is_admin %}
+      <a class="btn btn--ghost btn--icon {% if request.blueprint == 'admin' %}is-active{% endif %}"
+         href="{{ url_for('admin.users') }}" title="Сотрудники и доступы">
+        {{ ico.icon('users') }}
+      </a>
+      {% endif %}
+
+      <a class="user-chip" href="{{ url_for('admin.profile') }}" title="Мой профиль">
+        <span class="user-chip__avatar">{{ current_user.display_name[0] }}</span>
         <span>
-          {{ current_user.username }}
-          <span class="badge badge--neutral">{{ 'оператор' if current_user.is_operator else 'просмотр' }}</span>
+          {{ current_user.display_name }}
+          <span class="badge badge--neutral">{{ current_user.role_title }}</span>
         </span>
-      </div>
+      </a>
       <a class="btn btn--ghost btn--icon" href="{{ url_for('auth.logout') }}" title="Выйти">
         {{ ico.icon('logout') }}
       </a>

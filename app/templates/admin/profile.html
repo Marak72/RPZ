@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Мой профиль{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ current_user.display_name }}</h2>
+    <p>{{ current_user.username }} · {{ current_user.role_title }}</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__header">{{ ico.icon('grid') }}<span class="card__title">Доступные сервисы</span></div>
+  <div class="card__body">
+    <div class="inline">
+      {% for svc in services if current_user.can_use(svc.id) %}
+      <a class="badge badge--info" href="{{ url_for(svc.endpoint) }}">{{ svc.title }}</a>
+      {% else %}
+      <span class="text-sm muted">Сервисы не выданы — обратитесь к администратору.</span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<form method="post" class="mt-2">
+  {{ profile_form.hidden_tag() }}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('info') }}<span class="card__title">Реквизиты</span></div>
+    <div class="card__body">
+      <div class="field">
+        {{ profile_form.full_name.label(class="label") }}
+        {{ profile_form.full_name() }}
+      </div>
+      <div class="row">
+        <div class="field">
+          {{ profile_form.position.label(class="label") }}
+          {{ profile_form.position() }}
+        </div>
+        <div class="field">
+          {{ profile_form.email.label(class="label") }}
+          {{ profile_form.email() }}
+          {% for e in profile_form.email.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        </div>
+      </div>
+      {{ profile_form.submit_profile(class="btn btn--primary") }}
+    </div>
+  </div>
+</form>
+
+<form method="post" class="mt-2">
+  {{ password_form.hidden_tag() }}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('lock') }}<span class="card__title">Смена пароля</span></div>
+    <div class="card__body">
+      <div class="field">
+        {{ password_form.current.label(class="label") }}
+        {{ password_form.current(autocomplete="current-password") }}
+        {% for e in password_form.current.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+      </div>
+      <div class="row">
+        <div class="field">
+          {{ password_form.password.label(class="label") }}
+          {{ password_form.password(autocomplete="new-password") }}
+          {% for e in password_form.password.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        </div>
+        <div class="field">
+          {{ password_form.password2.label(class="label") }}
+          {{ password_form.password2(autocomplete="new-password") }}
+          {% for e in password_form.password2.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        </div>
+      </div>
+      {{ password_form.submit_password(class="btn btn--primary") }}
+    </div>
+  </div>
+</form>
+{% endblock %}

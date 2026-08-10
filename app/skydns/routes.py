@@ -85,7 +85,7 @@ from ..settings_store import (
     load_skydns_config,
     set_setting,
 )
-from ..web_utils import csv_response, fmt_dt, operator_required
+from ..web_utils import csv_response, fmt_dt, operator_required, service_guard
 from .forms import (
     ImportForm,
     ManualThreatForm,
@@ -96,6 +96,8 @@ from .forms import (
 )
 
 skydns_bp = Blueprint("skydns", __name__, url_prefix="/skydns")
+# Сервис виден только тем, кому его выдал администратор.
+skydns_bp.before_request(service_guard("skydns"))
 
 PER_PAGE = 100
 DEFAULT_WINDOW_HOURS = 24 * 7

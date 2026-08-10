@@ -19,7 +19,9 @@ from app.models import (  # noqa: E402
     ThreatDomain,
     ThreatHost,
     User,
+    UserService,
 )
+from app.portal import SERVICES  # noqa: E402
 from app.services.siem_client import HostHit, SearchResult, SiemError  # noqa: E402
 from app.skydns import routes as skydns_routes  # noqa: E402
 
@@ -81,6 +83,8 @@ def app(monkeypatch):
         user = User(username="op", role="operator")
         user.set_password("pass")
         db.session.add(user)
+        db.session.flush()
+        _grant_all(user)
         db.session.commit()
         yield application
 
@@ -90,6 +94,16 @@ def client(app):
     test_client = app.test_client()
     test_client.post("/login", data={"username": "op", "password": "pass"})
     return test_client
+
+
+def _grant_all(user: User) -> None:
+    """Выдать сотруднику все сервисы портала.
+
+    Без явной выдачи blueprint сервиса отдаёт 403 — доступ разграничивается
+    администратором.
+    """
+    for service in SERVICES:
+        db.session.add(UserService(user_id=user.id, service_id=service.id))
 
 
 def _add_threat(domain="obltub.ru", category="malware") -> int:
@@ -348,6 +362,8 @@ def test_manager_cannot_run_lookup(app):
         manager = User(username="mgr", role="manager")
         manager.set_password("pass")
         db.session.add(manager)
+        db.session.flush()
+        _grant_all(manager)
         threat_id = _add_threat()
         db.session.commit()
 

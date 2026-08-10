@@ -1,13 +1,19 @@
 {# На главной портала своей боковой навигации нет: сервисы выбираются
    переключателем выше. Здесь — только быстрые ссылки внутрь сервисов. #}
+{% set allowed = services | map(attribute='id') | list %}
+
+{% if allowed %}
 <div class="nav-group">
   <div class="nav-group__title">Быстрый переход</div>
+  {% if 'fstec' in allowed %}
   <a class="nav-link" href="{{ url_for('main.push_view') }}">
     {{ ico.icon('upload') }} Выгрузка в RPZ
     {% if nav_counts.pending %}
     <span class="nav-link__count nav-link__count--alert">{{ nav_counts.pending }}</span>
     {% endif %}
   </a>
+  {% endif %}
+  {% if 'skydns' in allowed %}
   <a class="nav-link" href="{{ url_for('skydns.domains') }}">
     {{ ico.icon('globe') }} Опасные домены
     <span class="nav-link__count">{{ skydns_counts.threats }}</span>
@@ -16,12 +22,28 @@
     {{ ico.icon('server') }} Конечные хосты
     <span class="nav-link__count">{{ skydns_counts.hosts }}</span>
   </a>
+  {% endif %}
   {% if current_user.is_operator %}
+  {% if 'fstec' in allowed %}
   <a class="nav-link" href="{{ url_for('main.settings') }}">
     {{ ico.icon('settings') }} Настройки ФСТЭК
   </a>
+  {% endif %}
+  {% if 'skydns' in allowed %}
   <a class="nav-link" href="{{ url_for('skydns.settings') }}">
     {{ ico.icon('settings') }} Настройки SkyDNS
   </a>
   {% endif %}
+  {% endif %}
 </div>
+{% endif %}
+
+{% if current_user.is_admin %}
+<div class="nav-group">
+  <div class="nav-group__title">Администрирование</div>
+  <a class="nav-link {% if ep == 'admin.users' %}is-active{% endif %}"
+     href="{{ url_for('admin.users') }}">
+    {{ ico.icon('users') }} Сотрудники
+  </a>
+</div>
+{% endif %}

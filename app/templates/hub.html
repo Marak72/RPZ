@@ -11,7 +11,24 @@
   </div>
 </div>
 
+{# services уже отфильтрован по доступу текущего сотрудника. #}
+{% set allowed = services | map(attribute='id') | list %}
+
+{% if not allowed %}
+<div class="card">
+  <div class="empty">
+    {{ ico.icon('lock') }}
+    <div class="empty__title">Сервисы не выданы</div>
+    <div class="empty__text">
+      Доступ к сервисам назначает администратор портала. Обратитесь к нему,
+      чтобы получить нужные разделы.
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="grid grid--2">
+  {% if 'fstec' in allowed %}
   <div class="card">
     <div class="card__header">
       {{ ico.icon('shield') }}
@@ -62,7 +79,9 @@
       </a>
     </div>
   </div>
+  {% endif %}
 
+  {% if 'skydns' in allowed %}
   <div class="card">
     <div class="card__header">
       {{ ico.icon('activity') }}
@@ -110,5 +129,6 @@
       </a>
     </div>
   </div>
+  {% endif %}
 </div>
 {% endblock %}

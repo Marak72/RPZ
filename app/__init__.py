@@ -31,12 +31,14 @@ def create_app(config_class: type = Config) -> Flask:
     # Регистрируем модели (нужно для миграций и user_loader).
     from . import models  # noqa: F401
 
+    from .admin.routes import admin_bp
     from .auth.routes import auth_bp
     from .hub.routes import hub_bp
     from .main.routes import main_bp
     from .skydns.routes import skydns_bp
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(admin_bp)
     app.register_blueprint(hub_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(skydns_bp)
@@ -55,9 +57,17 @@ def _register_portal_context(app: Flask) -> None:
 
     @app.context_processor
     def inject_services():
+        from flask_login import current_user
+
+        # В переключателе показываем только то, что выдано пользователю.
+        if current_user.is_authenticated:
+            allowed = [s for s in SERVICES if current_user.can_use(s.id)]
+        else:
+            allowed = []
         return {
             "hub": HUB,
-            "services": SERVICES,
+            "services": allowed,
+            "all_services": SERVICES,
             "active_service": service_by_blueprint(request.blueprint),
         }
 
@@ -112,22 +122,44 @@ def _register_cli(app: Flask) -> None:
     @click.option(
         "--role",
         default="operator",
-        type=click.Choice(["operator", "manager"]),
+        type=click.Choice(["admin", "operator", "manager"]),
         help="Роль пользователя.",
     )
+    @click.option("--full-name", default="", help="ФИО сотрудника.")
     @click.password_option()
-    def create_user(username: str, role: str, password: str) -> None:
-        """Создать пользователя приложения."""
-        from .models import User
+    def create_user(username: str, role: str, full_name: str,
+                    password: str) -> None:
+        """Создать пользователя портала (со всеми сервисами)."""
+        from .models import User, UserService
+        from .portal import SERVICES
 
         if User.query.filter_by(username=username).first():
             click.echo(f"Пользователь '{username}' уже существует.")
             return
-        user = User(username=username, role=role)
+        user = User(username=username, role=role, full_name=full_name)
         user.set_password(password)
         db.session.add(user)
+        db.session.flush()
+        # Из командной строки заводят первую учётную запись — ей нужны все
+        # сервисы, иначе портал окажется пустым. Сузить можно в веб-интерфейсе.
+        for service in SERVICES:
+            db.session.add(UserService(user_id=user.id, service_id=service.id))
         db.session.commit()
         click.echo(f"Пользователь '{username}' создан с ролью '{role}'.")
+
+    @app.cli.command("grant-admin")
+    @click.argument("username")
+    def grant_admin(username: str) -> None:
+        """Выдать существующему пользователю роль администратора."""
+        from .models import ROLE_ADMIN, User
+
+        user = User.query.filter_by(username=username).first()
+        if not user:
+            click.echo(f"Пользователь '{username}' не найден.")
+            return
+        user.role = ROLE_ADMIN
+        db.session.commit()
+        click.echo(f"Пользователь '{username}' теперь администратор.")
 
     @app.cli.command("set-password")
     @click.argument("username")

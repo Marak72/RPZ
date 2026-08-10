@@ -49,7 +49,7 @@ from ..settings_store import (
     set_setting,
 )
 from ..web_utils import csv_response as _csv_response
-from ..web_utils import operator_required
+from ..web_utils import operator_required, service_guard
 from .forms import (
     AppSettingsForm,
     ManualAddForm,
@@ -61,6 +61,8 @@ from .forms import (
 # Сервис живёт на своём подпути: снаружи это /soc/fstec/, в корне портала —
 # главная страница со списком сервисов (blueprint hub).
 main_bp = Blueprint("main", __name__, url_prefix="/fstec")
+# Сервис виден только тем, кому его выдал администратор.
+main_bp.before_request(service_guard("fstec"))
 
 # Типы записей, которые являются хешами (а не адресами для блокировки).
 HASH_TYPES = ("sha256", "sha1", "md5")

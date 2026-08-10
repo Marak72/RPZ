@@ -10,6 +10,23 @@ from flask import Response, abort
 from flask_login import current_user, login_required
 
 
+def service_guard(service_id: str):
+    """Закрыть blueprint сервиса от тех, кому он не выдан.
+
+    Ставится как ``before_request``: страницу нельзя открыть по прямой ссылке,
+    даже если её нет в переключателе.
+    """
+
+    def check():
+        if not current_user.is_authenticated:
+            return None  # авторизацией занимается login_required на маршрутах
+        if not current_user.can_use(service_id):
+            abort(403)
+        return None
+
+    return check
+
+
 def operator_required(view):
     """Доступ только для операторов; менеджеры — только просмотр."""
 

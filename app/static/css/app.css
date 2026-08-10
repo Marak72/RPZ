@@ -244,6 +244,14 @@ code, .mono { font-family: var(--font-mono); font-size: .8125rem; }
   font-size: .8125rem; color: var(--text-muted);
   padding-right: .25rem;
 }
+a.user-chip { text-decoration: none; border-radius: var(--radius-sm); padding: .25rem .375rem; }
+a.user-chip:hover { background: var(--surface-3); text-decoration: none; }
+
+/* Список галочек (выбор сервисов у сотрудника). */
+.check-list ul { list-style: none; margin: 0; padding: 0; }
+.check-list li { display: flex; align-items: center; gap: .5rem; padding: .3125rem 0; }
+.check-list label { font-size: .8125rem; cursor: pointer; }
+
 .user-chip__avatar {
   width: 28px; height: 28px; border-radius: 50%;
   background: var(--primary); color: #fff;

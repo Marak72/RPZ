@@ -11,7 +11,8 @@ from config import Config
 
 from app import create_app
 from app.extensions import db
-from app.models import User
+from app.models import User, UserService
+from app.portal import SERVICES
 
 
 class TestConfig(Config):
@@ -43,6 +44,10 @@ def _client(config):
         user = User(username="op", role="operator")
         user.set_password("pass")
         db.session.add(user)
+        db.session.flush()
+        # Доступ к сервисам выдаёт администратор — без выдачи будет 403.
+        for service in SERVICES:
+            db.session.add(UserService(user_id=user.id, service_id=service.id))
         db.session.commit()
         client = application.test_client()
         client.post("/login", data={"username": "op", "password": "pass"})

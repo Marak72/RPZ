@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ 'Сотрудник' if user else 'Новый сотрудник' }}{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ user.display_name if user else 'Новый сотрудник' }}</h2>
+    <p>{% if user %}Учётная запись создана
+        {{ user.created_at.strftime('%d.%m.%Y') if user.created_at else '' }}.
+       {% else %}Логин и пароль сотрудник получит от вас.{% endif %}</p>
+  </div>
+  <a class="btn" href="{{ url_for('admin.users') }}">← Все сотрудники</a>
+</div>
+
+<form method="post">
+  {{ form.hidden_tag() }}
+
+  <div class="card">
+    <div class="card__header">{{ ico.icon('info') }}<span class="card__title">Сотрудник</span></div>
+    <div class="card__body">
+      <div class="row">
+        <div class="field">
+          {{ form.username.label(class="label") }}
+          {{ form.username(autocomplete="off") }}
+          {% for e in form.username.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        </div>
+        <div class="field" style="flex:2">
+          {{ form.full_name.label(class="label") }}
+          {{ form.full_name(placeholder="Иванов Иван Иванович") }}
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          {{ form.position.label(class="label") }}
+          {{ form.position(placeholder="специалист по ИБ") }}
+        </div>
+        <div class="field">
+          {{ form.email.label(class="label") }}
+          {{ form.email(placeholder="ivanov@72to.ru") }}
+          {% for e in form.email.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mt-2">
+    <div class="card__header">{{ ico.icon('shield') }}<span class="card__title">Права</span></div>
+    <div class="card__body">
+      <div class="field">
+        {{ form.role.label(class="label") }}
+        {{ form.role() }}
+        <div class="help">
+          <strong>Администратор</strong> — всё, что оператор, плюс управление
+          учётными записями и доступ ко всем сервисам.<br>
+          <strong>Оператор</strong> — меняет данные в доступных сервисах:
+          загрузка писем, выгрузка в RPZ, запросы в SIEM, настройки.<br>
+          <strong>Просмотр</strong> — только читает.
+        </div>
+      </div>
+
+      <div class="field">
+        {{ form.services.label(class="label") }}
+        <div class="check-list">{{ form.services() }}</div>
+        <div class="help">Невыбранные сервисы не показываются в переключателе
+          и закрыты по прямой ссылке. Администратору доступны все.</div>
+      </div>
+
+      <div class="check">
+        {{ form.is_enabled() }}
+        <div>
+          {{ form.is_enabled.label() }}
+          <div class="help">Отключённая учётная запись не пускает в портал,
+            но остаётся автором записей в журналах.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card mt-2">
+    <div class="card__header">{{ ico.icon('lock') }}<span class="card__title">Пароль</span></div>
+    <div class="card__body">
+      <div class="row">
+        <div class="field">
+          {{ form.password.label(class="label") }}
+          {{ form.password(autocomplete="new-password") }}
+          {% for e in form.password.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        </div>
+        <div class="field">
+          {{ form.password2.label(class="label") }}
+          {{ form.password2(autocomplete="new-password") }}
+          {% for e in form.password2.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        </div>
+      </div>
+      <div class="help">
+        {% if user %}Оставьте пустым, чтобы не менять пароль.
+        {% else %}Не короче 8 символов.{% endif %}
+      </div>
+    </div>
+    <div class="card__footer">
+      {{ form.submit(class="btn btn--primary") }}
+    </div>
+  </div>
+</form>
+{% endblock %}

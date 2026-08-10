@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Сотрудники{% endblock %}
+{% block subheading %}<div class="topbar__sub">Учётные записи и доступ к сервисам</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Сотрудники отдела</h2>
+    <p>Роль определяет, что можно делать; список сервисов — что вообще видно.
+       Администратору доступны все сервисы независимо от отметок.</p>
+  </div>
+  <a class="btn btn--primary" href="{{ url_for('admin.user_new') }}">
+    {{ ico.icon('play') }} Добавить сотрудника
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Сотрудник</th><th>Роль</th><th>Сервисы</th>
+          <th>Последний вход</th><th>Состояние</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in items %}
+        <tr>
+          <td>
+            <a href="{{ url_for('admin.user_edit', user_id=u.id) }}">
+              {{ u.display_name }}</a>
+            <div class="text-xs muted">
+              {{ u.username }}{% if u.position %} · {{ u.position }}{% endif %}
+              {%- if u.email %} · {{ u.email }}{% endif %}
+            </div>
+          </td>
+          <td>
+            {% if u.role == 'admin' %}<span class="badge badge--danger">администратор</span>
+            {% elif u.role == 'operator' %}<span class="badge badge--primary">оператор</span>
+            {% else %}<span class="badge badge--neutral">просмотр</span>{% endif %}
+          </td>
+          <td class="text-xs">
+            {% if u.is_admin %}
+              <span class="badge badge--neutral">все</span>
+            {% else %}
+              {% for svc in services if u.can_use(svc.id) %}
+              <span class="badge badge--info">{{ svc.title }}</span>
+              {% else %}
+              <span class="muted">нет доступа</span>
+              {% endfor %}
+            {% endif %}
+          </td>
+          <td class="text-xs muted nowrap">
+            {{ u.last_login_at.strftime('%d.%m.%Y %H:%M') if u.last_login_at else 'не входил' }}
+          </td>
+          <td>
+            {% if u.is_enabled %}<span class="badge badge--success">активна</span>
+            {% else %}<span class="badge badge--warning">отключена</span>{% endif %}
+          </td>
+          <td class="num nowrap">
+            <form method="post" action="{{ url_for('admin.user_toggle', user_id=u.id) }}"
+                  style="display:inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn--ghost btn--sm"
+                      title="{{ 'Отключить' if u.is_enabled else 'Включить' }}">
+                {{ ico.icon('lock' if u.is_enabled else 'check') }}
+              </button>
+            </form>
+            <form method="post" action="{{ url_for('admin.user_delete', user_id=u.id) }}"
+                  style="display:inline"
+                  data-confirm="1" data-confirm-title="Удалить учётную запись?"
+                  data-confirm-ok="Удалить"
+                  data-confirm-body="Записи в журналах потеряют автора.<br>Обычно правильнее отключить учётную запись, а не удалять.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn--ghost btn--sm" title="Удалить">{{ ico.icon('x') }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="note mt-2">
+  <strong>Отключить или удалить?</strong> Отключённая учётная запись не пускает
+  в портал, но остаётся автором в журналах выгрузок и запросов. Удаление стирает
+  эту связь, поэтому по умолчанию стоит отключать.
+</div>
+{% endblock %}

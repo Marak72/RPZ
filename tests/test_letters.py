@@ -9,7 +9,15 @@ from config import Config
 from app import create_app
 from app.extensions import db
 from app.main import routes as main_routes
-from app.models import BlockEntry, Document, IocHash, UrlEntry, User
+from app.models import (
+    BlockEntry,
+    Document,
+    IocHash,
+    UrlEntry,
+    User,
+    UserService,
+)
+from app.portal import SERVICES
 from app.services import doc_parser
 
 # Минимальное письмо: индикаторы на отдельных строках — так их видит парсер.
@@ -50,6 +58,10 @@ def app(tmp_path, monkeypatch):
         user = User(username="op", role="operator")
         user.set_password("pass")
         db.session.add(user)
+        db.session.flush()
+        # Доступ к сервисам выдаёт администратор — без выдачи будет 403.
+        for service in SERVICES:
+            db.session.add(UserService(user_id=user.id, service_id=service.id))
         db.session.commit()
         yield application
 
