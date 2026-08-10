@@ -1,9 +1,10 @@
 from flask_wtf import FlaskForm
-from flask_wtf.file import FileAllowed, FileField, FileRequired
+from flask_wtf.file import FileAllowed, FileField
 from wtforms import (
     BooleanField,
     DateField,
     IntegerField,
+    MultipleFileField,
     PasswordField,
     StringField,
     SubmitField,
@@ -13,15 +14,22 @@ from wtforms.validators import DataRequired, NumberRange, Optional
 
 
 class UploadForm(FlaskForm):
-    document = FileField(
-        "Файл письма (.docx / .odt / .pdf)",
+    """Загрузка одного или нескольких файлов писем за раз.
+
+    Каждый файл сохраняется как отдельное письмо, поэтому у любого индикатора
+    видно, из какого именно документа он пришёл. Реквизиты (номер, дата,
+    примечание) применяются ко всем файлам пачки — так удобно грузить письмо
+    вместе с приложениями.
+    """
+
+    documents = MultipleFileField(
+        "Файлы писем (.docx / .odt / .pdf) — можно выбрать несколько",
         validators=[
-            FileRequired(message="Выберите файл."),
             FileAllowed(["docx", "odt", "pdf"], "Только файлы .docx, .odt и .pdf"),
         ],
     )
     pdf = FileField(
-        "PDF письма для просмотра (необязательно)",
+        "PDF для просмотра (необязательно, к первому файлу)",
         validators=[Optional(), FileAllowed(["pdf"], "Только файл .pdf")],
     )
     letter_number = StringField("Номер письма", validators=[Optional()])

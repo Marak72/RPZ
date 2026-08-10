@@ -130,10 +130,16 @@
             </td>
             <td class="muted nowrap text-xs">{{ r.pushed_at.strftime('%d.%m.%Y %H:%M') if r.pushed_at else '—' }}</td>
             <td class="muted text-xs">
-              {% if r.source == 'skydns' %}SkyDNS
+              {% if r.source == 'skydns' %}
+                <a href="{{ url_for('skydns.domains', q=r.value) }}"
+                   title="Открыть в сервисе «Угрозы SkyDNS»">SkyDNS</a>
               {% elif r.source == 'manual' %}вручную
               {% elif r.source == 'zone' %}—
-              {% else %}{{ r.document or '—' }}{% endif %}
+              {% elif r.document_id %}
+                <a href="{{ url_for('main.document_view', doc_id=r.document_id) }}"
+                   title="Открыть письмо {{ r.document }}">
+                  {{ r.document_number or r.document }}</a>
+              {% else %}—{% endif %}
             </td>
           </tr>
           {% else %}

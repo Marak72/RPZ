@@ -52,6 +52,10 @@
   </div>
   <div class="btn-group">
     <a class="btn" href="{{ url_for('main.documents') }}">← Все письма</a>
+    <a class="btn" href="{{ url_for('main.document_csv', doc_id=doc.id) }}"
+       title="Домены, IP, URL и хеши этого письма одним файлом">
+      {{ ico.icon('download') }} Экспорт CSV
+    </a>
     {% if doc.stored_name or doc.pdf_stored_name %}
     <a class="btn btn--primary" href="{{ url_for('main.document_file', doc_id=doc.id) }}" target="_blank">
       {{ ico.icon('eye') }} Открыть письмо

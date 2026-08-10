@@ -9,9 +9,15 @@
     <h2>Письма ФСТЭК</h2>
     <p>Каждое письмо хранится целиком — его можно открыть и увидеть, откуда взялся любой индикатор.</p>
   </div>
-  {% if current_user.is_operator %}
-  <a class="btn btn--primary" href="{{ url_for('main.upload') }}">{{ ico.icon('upload') }} Загрузить письмо</a>
-  {% endif %}
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('main.documents_csv') }}"
+       title="Индикаторы всех писем с привязкой к письму">
+      {{ ico.icon('download') }} Экспорт CSV
+    </a>
+    {% if current_user.is_operator %}
+    <a class="btn btn--primary" href="{{ url_for('main.upload') }}">{{ ico.icon('upload') }} Загрузить письма</a>
+    {% endif %}
+  </div>
 </div>
 
 <div class="card">

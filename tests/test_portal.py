@@ -64,7 +64,7 @@ def proxied_client():
 def test_portal_home_is_at_root(client):
     response = client.get("/")
     assert response.status_code == 200
-    assert "Портал ИБ" in response.get_data(as_text=True)
+    assert "Портал SOC" in response.get_data(as_text=True)
 
 
 def test_fstec_service_lives_under_its_own_prefix(client):

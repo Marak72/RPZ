@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% import "_icons.html" as ico %}
-{% block title %}Загрузить письмо{% endblock %}
+{% block title %}Загрузить письма{% endblock %}
 {% block content_class %} content--narrow{% endblock %}
 
 {% block content %}
 <div class="page-head">
   <div class="page-head__text">
-    <h2>Загрузка письма ФСТЭК</h2>
-    <p>Система извлечёт домены, IP-адреса, ссылки и хеши, а затем покажет их для проверки.</p>
+    <h2>Загрузка писем ФСТЭК</h2>
+    <p>Можно выбрать сразу несколько файлов — например, письмо вместе с приложениями.
+       Система извлечёт домены, IP-адреса, ссылки и хеши из каждого и покажет их для проверки.</p>
   </div>
 </div>
 
@@ -17,11 +18,15 @@
       {{ form.hidden_tag() }}
 
       <div class="field">
-        {{ form.document.label(class="label") }}
-        {{ form.document(accept=".docx,.odt,.pdf") }}
-        {% for e in form.document.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
-        <div class="help">Форматы <code>.docx</code>, <code>.odt</code>, <code>.pdf</code>, до 32 МБ.
-          Файл сохраняется целиком — письмо можно будет открыть позже.</div>
+        {{ form.documents.label(class="label") }}
+        {{ form.documents(accept=".docx,.odt,.pdf", multiple=True) }}
+        {% for e in form.documents.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        <div class="help">
+          Форматы <code>.docx</code>, <code>.odt</code>, <code>.pdf</code>, до 32 МБ каждый.
+          Файлы сохраняются целиком — письма можно будет открыть позже.
+          <strong>Каждый файл станет отдельным письмом</strong>, поэтому у любого
+          индикатора будет видно, из какого документа он взят.
+        </div>
       </div>
 
       <div class="field">
@@ -29,7 +34,7 @@
         {{ form.pdf(accept=".pdf") }}
         {% for e in form.pdf.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
         <div class="help">Нужен, только если основной файл — <code>.docx</code>/<code>.odt</code>:
-          PDF откроется прямо в браузере.</div>
+          PDF откроется прямо в браузере. Прикрепляется к первому файлу пачки.</div>
       </div>
 
       <div class="row">

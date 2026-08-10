@@ -2,6 +2,7 @@
 выгрузка на боевой DNS-сервер, экспорт CSV и настройки."""
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import datetime
@@ -285,34 +286,45 @@ def rpz_snapshot_view(snapshot_id: int):
 # --- Загрузка и разбор писем ФСТЭК ----------------------------------------
 
 def _split_extracted(extracted) -> dict:
-    """Разложить результат парсера по категориям с отметками о наличии в базе."""
+    """Разложить результат парсера по категориям с отметками о наличии в базе.
+
+    На вход идут пары ``(индекс файла, запись)``: индекс нужен, чтобы при
+    сохранении привязать индикатор к тому письму, из которого он взят.
+    """
     existing = {b.value for b in BlockEntry.query.all()}
     existing_urls = {u.value for u in UrlEntry.query.all()}
     existing_hashes = {h.value for h in IocHash.query.all()}
     blocked = _latest_blocked_domains()
 
     domains, ips, urls, hashes = [], [], [], []
-    for e in extracted:
+    seen = set()
+    for index, e in extracted:
+        # Один и тот же индикатор мог встретиться в нескольких файлах пачки —
+        # показываем его один раз, с привязкой к первому файлу.
+        if (e.entry_type, e.value) in seen:
+            continue
+        seen.add((e.entry_type, e.value))
+
         if e.entry_type == "domain":
             domains.append({
-                "value": e.value, "type": "domain",
+                "value": e.value, "type": "domain", "file": index,
                 "already_in_db": e.value in existing,
                 "in_rpz": e.value in blocked,
             })
         elif e.entry_type == "ip":
             ips.append({
-                "value": e.value, "type": "ip",
+                "value": e.value, "type": "ip", "file": index,
                 "already_in_db": e.value in existing,
                 "in_rpz": False,
             })
         elif e.entry_type == "url":
             urls.append({
-                "value": e.value, "host": e.host,
+                "value": e.value, "host": e.host, "file": index,
                 "already_in_db": e.value in existing_urls,
             })
         elif e.entry_type in HASH_TYPES:
             hashes.append({
-                "value": e.value, "type": e.entry_type,
+                "value": e.value, "type": e.entry_type, "file": index,
                 "already_in_db": e.value in existing_hashes,
             })
     return {"domains": domains, "ips": ips, "urls": urls, "hashes": hashes}
@@ -338,66 +350,86 @@ def _store_letter_file(data: bytes, original_name: str) -> str:
 def upload():
     form = UploadForm()
     if form.validate_on_submit():
-        file = form.document.data
-        data = file.read()
-        extracted = []
-        try:
-            extracted = doc_parser.extract_from_file(file.filename, data)
-        except doc_parser.MissingDependency as exc:
-            # Библиотеки для разбора нет — письмо всё равно сохраняем,
-            # индикаторы можно будет добавить вручную.
-            flash(str(exc), "warning")
-        except ValueError as exc:
-            flash(str(exc), "danger")
-            return redirect(url_for("main.upload"))
-        except Exception as exc:  # noqa: BLE001 — повреждённый документ и т.п.
-            current_app.logger.exception("Ошибка разбора письма")
-            flash(
-                f"Не удалось разобрать файл «{file.filename}»: {exc}. "
-                "Письмо можно сохранить и добавить индикаторы вручную.",
-                "warning",
-            )
+        files = [f for f in (form.documents.data or []) if f and f.filename]
+        if not files:
+            flash("Выберите хотя бы один файл письма.", "danger")
+            return render_template("upload.html", form=form)
 
-        # Сохраняем сам файл письма, чтобы его можно было открыть позже.
-        try:
-            stored = _store_letter_file(data, file.filename)
-        except OSError as exc:
-            current_app.logger.exception("Не удалось сохранить файл письма")
-            flash(f"Не удалось сохранить файл письма: {exc}", "danger")
-            return redirect(url_for("main.upload"))
+        parsed_files = []   # сведения о каждом файле для сохранения
+        extracted = []      # индикаторы всех файлов с пометкой источника
+        for index, file in enumerate(files):
+            data = file.read()
+            try:
+                found = doc_parser.extract_from_file(file.filename, data)
+            except doc_parser.MissingDependency as exc:
+                # Библиотеки для разбора нет — письмо всё равно сохраняем,
+                # индикаторы можно будет добавить вручную.
+                flash(str(exc), "warning")
+                found = []
+            except ValueError as exc:
+                flash(f"{file.filename}: {exc}", "danger")
+                return render_template("upload.html", form=form)
+            except Exception as exc:  # noqa: BLE001 — повреждённый документ и т.п.
+                current_app.logger.exception("Ошибка разбора письма")
+                flash(
+                    f"Не удалось разобрать файл «{file.filename}»: {exc}. "
+                    "Письмо можно сохранить и добавить индикаторы вручную.",
+                    "warning",
+                )
+                found = []
 
-        pdf_stored = pdf_name = ""
-        pdf_size = 0
-        if form.pdf.data:
+            # Сохраняем сам файл письма, чтобы его можно было открыть позже.
+            try:
+                stored = _store_letter_file(data, file.filename)
+            except OSError as exc:
+                current_app.logger.exception("Не удалось сохранить файл письма")
+                flash(f"Не удалось сохранить файл письма: {exc}", "danger")
+                return render_template("upload.html", form=form)
+
+            parsed_files.append({
+                "index": index,
+                "filename": secure_filename(file.filename) or file.filename,
+                "stored_name": stored,
+                "content_type": file.mimetype or "",
+                "file_size": len(data),
+                "pdf_stored_name": "",
+                "pdf_original_name": "",
+                "pdf_size": 0,
+                "found": len(found),
+            })
+            for item in found:
+                extracted.append((index, item))
+
+        # Отдельный PDF для просмотра прикладывается к первому файлу пачки.
+        if form.pdf.data and form.pdf.data.filename:
             pdf_bytes = form.pdf.data.read()
             if pdf_bytes:
-                pdf_stored = _store_letter_file(pdf_bytes, form.pdf.data.filename)
-                pdf_name = secure_filename(form.pdf.data.filename)
-                pdf_size = len(pdf_bytes)
+                parsed_files[0]["pdf_stored_name"] = _store_letter_file(
+                    pdf_bytes, form.pdf.data.filename
+                )
+                parsed_files[0]["pdf_original_name"] = secure_filename(
+                    form.pdf.data.filename
+                )
+                parsed_files[0]["pdf_size"] = len(pdf_bytes)
 
         groups = _split_extracted(extracted)
         total = sum(len(v) for v in groups.values())
         if total == 0:
             flash(
-                "В документе не найдено ни одного индикатора, но само письмо сохранено. "
-                "Возможно, индикаторы приведены в приложении к письму отдельным файлом.",
+                "Ни в одном файле не найдено индикаторов, но письма сохранены. "
+                "Возможно, индикаторы приведены в приложении отдельным файлом.",
                 "warning",
             )
 
         return render_template(
             "preview.html",
             groups=groups,
-            filename=secure_filename(file.filename) or file.filename,
+            files=parsed_files,
+            files_json=json.dumps(parsed_files, ensure_ascii=False),
             notes=form.notes.data or "",
             letter_number=form.letter_number.data or "",
             letter_date=form.letter_date.data.isoformat() if form.letter_date.data else "",
             total=total,
-            stored_name=stored,
-            content_type=file.mimetype or "",
-            file_size=len(data),
-            pdf_stored_name=pdf_stored,
-            pdf_original_name=pdf_name,
-            pdf_size=pdf_size,
         )
     return render_template("upload.html", form=form)
 
@@ -421,19 +453,36 @@ def preview_csv():
     return _csv_response("fstec-parsed", ["Категория", "Значение", "Тип"], rows)
 
 
+def _split_choice(raw: str) -> tuple:
+    """Разобрать значение чекбокса вида ``<индекс файла>|<значение>``."""
+    index, _, value = str(raw).partition("|")
+    if not _:
+        return 0, index.strip()
+    return (int(index) if index.strip().isdigit() else 0), value.strip()
+
+
 @main_bp.route("/preview", methods=["POST"])
 @operator_required
 def preview_save():
     selected = request.form.getlist("selected")
     selected_urls = request.form.getlist("selected_url")
     selected_hashes = request.form.getlist("selected_hash")
-    filename = request.form.get("filename", "письмо")
     notes = request.form.get("notes", "")
 
-    stored_name = request.form.get("stored_name", "")
-    if not (selected or selected_urls or selected_hashes or stored_name):
-        flash("Не выбрано ни одной записи для сохранения.", "warning")
+    try:
+        files = json.loads(request.form.get("files_json") or "[]")
+    except (ValueError, TypeError):
+        files = []
+    if not files:
+        flash("Данные о загруженных файлах потерялись — загрузите письма заново.",
+              "danger")
         return redirect(url_for("main.upload"))
+
+    if not (selected or selected_urls or selected_hashes):
+        flash(
+            "Не выбрано ни одной записи, но сами письма сохранены.",
+            "warning",
+        )
 
     blocked = _latest_blocked_domains()
     existing = {b.value for b in BlockEntry.query.all()}
@@ -448,31 +497,45 @@ def preview_save():
         except ValueError:
             letter_date = None
 
-    doc = Document(
-        filename=filename,
-        uploaded_by=current_user.id,
-        notes=notes,
-        letter_number=request.form.get("letter_number", ""),
-        letter_date=letter_date,
-        stored_name=stored_name,
-        content_type=request.form.get("content_type", ""),
-        file_size=int(request.form.get("file_size") or 0),
-        pdf_stored_name=request.form.get("pdf_stored_name", ""),
-        pdf_original_name=request.form.get("pdf_original_name", ""),
-        pdf_size=int(request.form.get("pdf_size") or 0),
-    )
-    db.session.add(doc)
+    letter_number = request.form.get("letter_number", "")
+
+    # Каждый загруженный файл становится отдельным письмом: так у индикатора
+    # видно, из какого именно документа он пришёл.
+    documents = {}
+    for item in files:
+        doc = Document(
+            filename=item.get("filename") or "письмо",
+            uploaded_by=current_user.id,
+            notes=notes,
+            letter_number=letter_number,
+            letter_date=letter_date,
+            stored_name=item.get("stored_name", ""),
+            content_type=item.get("content_type", ""),
+            file_size=int(item.get("file_size") or 0),
+            pdf_stored_name=item.get("pdf_stored_name", ""),
+            pdf_original_name=item.get("pdf_original_name", ""),
+            pdf_size=int(item.get("pdf_size") or 0),
+        )
+        db.session.add(doc)
+        documents[int(item.get("index") or 0)] = doc
     db.session.flush()
 
-    added = 0
-    for value in selected:
-        value = value.strip().lower()
+    def _doc_for(index: int):
+        return documents.get(index) or next(iter(documents.values()))
+
+    counts = {doc.id: 0 for doc in documents.values()}
+    added = urls_added = hashes_added = 0
+
+    for raw in selected:
+        index, value = _split_choice(raw)
+        value = value.lower()
         if not value or value in existing:
             continue
         is_ip = doc_parser._valid_ipv4(value)
         # Не сохраняем мусор: домен обязан пройти строгую валидацию.
         if not is_ip and not doc_parser.is_valid_domain(value):
             continue
+        doc = _doc_for(index)
         db.session.add(
             BlockEntry(
                 value=value,
@@ -483,27 +546,30 @@ def preview_save():
             )
         )
         existing.add(value)
+        counts[doc.id] += 1
         added += 1
 
-    urls_added = 0
-    for value in selected_urls:
-        value = value.strip()
+    for raw in selected_urls:
+        index, value = _split_choice(raw)
         if not value or value in existing_urls:
             continue
         parsed = doc_parser._parse_url(value)
         host = parsed[0] if parsed else ""
+        doc = _doc_for(index)
         db.session.add(
             UrlEntry(value=value, host=host, document_id=doc.id,
                      added_by=current_user.id)
         )
         existing_urls.add(value)
+        counts[doc.id] += 1
         urls_added += 1
 
-    hashes_added = 0
-    for value in selected_hashes:
-        value = value.strip().lower()
+    for raw in selected_hashes:
+        index, value = _split_choice(raw)
+        value = value.lower()
         if not value or value in existing_hashes:
             continue
+        doc = _doc_for(index)
         db.session.add(
             IocHash(
                 value=value,
@@ -513,9 +579,12 @@ def preview_save():
             )
         )
         existing_hashes.add(value)
+        counts[doc.id] += 1
         hashes_added += 1
 
-    doc.entries_found = added + urls_added + hashes_added
+    for doc in documents.values():
+        doc.entries_found = counts.get(doc.id, 0)
+
     try:
         db.session.commit()
     except Exception as exc:  # noqa: BLE001 — например, гонка по уникальному индексу
@@ -524,11 +593,16 @@ def preview_save():
         flash(f"Не удалось сохранить записи: {exc}", "danger")
         return redirect(url_for("main.upload"))
 
+    word = "Письмо сохранено" if len(documents) == 1 else \
+        f"Сохранено писем: {len(documents)}"
     flash(
-        f"Письмо сохранено. Адресов — {added}, URL — {urls_added}, хешей — {hashes_added}.",
+        f"{word}. Адресов — {added}, URL — {urls_added}, хешей — {hashes_added}.",
         "success",
     )
-    return redirect(url_for("main.document_view", doc_id=doc.id))
+    if len(documents) == 1:
+        return redirect(url_for("main.document_view",
+                                doc_id=next(iter(documents.values())).id))
+    return redirect(url_for("main.documents"))
 
 
 def _hash_type_of(value: str) -> str:
@@ -584,6 +658,64 @@ def document_view(doc_id: int):
         urls=UrlEntry.query.filter_by(document_id=doc.id).all(),
         hashes=IocHash.query.filter_by(document_id=doc.id).all(),
     )
+
+
+def _letter_rows(doc) -> list:
+    """Все индикаторы письма одним списком — для выгрузки и общего экспорта."""
+    rows = []
+    for entry in (BlockEntry.query.filter_by(document_id=doc.id)
+                  .order_by(BlockEntry.entry_type, BlockEntry.value).all()):
+        vt = entry.vt
+        rows.append([
+            "домен" if entry.entry_type == "domain" else "IP-адрес",
+            entry.value,
+            entry.status,
+            vt.score if vt else "",
+            vt.verdict if vt else "",
+            doc.letter_number or "",
+            _fmt_date(doc.letter_date),
+            doc.filename,
+            entry.notes or "",
+        ])
+    for url in UrlEntry.query.filter_by(document_id=doc.id).order_by(
+            UrlEntry.value).all():
+        rows.append(["URL", url.value, "", "", "", doc.letter_number or "",
+                     _fmt_date(doc.letter_date), doc.filename, url.notes or ""])
+    for ioc in IocHash.query.filter_by(document_id=doc.id).order_by(
+            IocHash.value).all():
+        rows.append([ioc.hash_type, ioc.value, "", "", "",
+                     doc.letter_number or "", _fmt_date(doc.letter_date),
+                     doc.filename, ioc.notes or ""])
+    return rows
+
+
+LETTER_CSV_HEADER = ["Тип", "Значение", "Статус", "VT", "Вердикт VT",
+                     "Номер письма", "Дата письма", "Файл", "Примечание"]
+
+
+def _fmt_date(value) -> str:
+    return value.strftime("%d.%m.%Y") if value else ""
+
+
+@main_bp.route("/letters/<int:doc_id>.csv")
+@login_required
+def document_csv(doc_id: int):
+    """Все индикаторы одного письма: домены, IP, URL и хеши в одном файле."""
+    doc = db.session.get(Document, doc_id)
+    if not doc:
+        abort(404)
+    name = (doc.letter_number or f"letter-{doc.id}").replace("/", "-")
+    return _csv_response(f"fstec-{name}", LETTER_CSV_HEADER, _letter_rows(doc))
+
+
+@main_bp.route("/letters.csv")
+@login_required
+def documents_csv():
+    """Сводная выгрузка: индикаторы всех писем с привязкой к письму."""
+    rows = []
+    for doc in Document.query.order_by(Document.uploaded_at.desc()).all():
+        rows.extend(_letter_rows(doc))
+    return _csv_response("fstec-letters", LETTER_CSV_HEADER, rows)
 
 
 @main_bp.route("/letters/<int:doc_id>/file")
@@ -985,6 +1117,8 @@ def push_view():
             "in_rpz": d.value in blocked,
             "pushed_at": d.pushed_at,
             "document": d.document.filename if d.document else "",
+            "document_id": d.document.id if d.document else None,
+            "document_number": d.document.letter_number if d.document else "",
             "source": d.source,
             "vt": vt_map.get(d.value),
             "protected": d.value in protected,
@@ -995,7 +1129,8 @@ def push_view():
     for extra in sorted(blocked - known):
         rows.append({
             "id": None, "value": extra, "status": "in_rpz", "in_rpz": True,
-            "pushed_at": None, "document": "", "source": "zone",
+            "pushed_at": None, "document": "", "document_id": None,
+            "document_number": "", "source": "zone",
             "vt": vt_map.get(extra), "protected": extra in protected,
         })
 

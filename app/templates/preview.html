@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% import "_icons.html" as ico %}
 {% block title %}Предпросмотр{% endblock %}
-{% block subheading %}<div class="topbar__sub">{{ filename }}</div>{% endblock %}
+{% block subheading %}<div class="topbar__sub">
+  {% if files|length == 1 %}{{ files[0].filename }}
+  {% else %}файлов: {{ files|length }}{% endif %}
+</div>{% endblock %}
 
-{% macro rows_table(id, items, group, kind) %}
+{% macro rows_table(id, items, group, kind, files) %}
 <div class="card">
   <div class="toolbar">
     <div class="search">
@@ -25,6 +28,7 @@
           <th>{{ 'URL' if kind == 'url' else ('Хеш' if kind == 'hash' else 'Значение') }}</th>
           {% if kind == 'url' %}<th>Хост</th>{% endif %}
           {% if kind == 'hash' %}<th>Тип</th>{% endif %}
+          {% if files|length > 1 %}<th>Из файла</th>{% endif %}
           <th>Статус</th>
         </tr>
       </thead>
@@ -34,11 +38,14 @@
           <td>
             <input type="checkbox" data-select="{{ group }}"
                    name="{{ 'selected_url' if kind == 'url' else ('selected_hash' if kind == 'hash' else 'selected') }}"
-                   value="{{ it.value }}" {% if not it.already_in_db %}checked{% endif %}>
+                   value="{{ it.file }}|{{ it.value }}" {% if not it.already_in_db %}checked{% endif %}>
           </td>
           <td class="value {% if kind == 'url' %}url-cell{% endif %}" data-value="{{ it.value }}">{{ it.value }}</td>
           {% if kind == 'url' %}<td class="mono muted">{{ it.host }}</td>{% endif %}
           {% if kind == 'hash' %}<td><span class="badge badge--info">{{ it.type }}</span></td>{% endif %}
+          {% if files|length > 1 %}
+          <td class="text-xs muted">{{ files[it.file].filename }}</td>
+          {% endif %}
           <td>
             {% if it.get('in_rpz') %}<span class="badge badge--success">уже в RPZ</span>
             {% elif it.already_in_db %}<span class="badge badge--neutral">уже в базе</span>
@@ -47,7 +54,7 @@
         </tr>
         {% else %}
         <tr data-empty>
-          <td colspan="4"><div class="empty"><div class="empty__title">Не найдено</div></div></td>
+          <td colspan="5"><div class="empty"><div class="empty__title">Не найдено</div></div></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -60,23 +67,28 @@
 <div class="page-head">
   <div class="page-head__text">
     <h2>Распознанные индикаторы</h2>
-    <p>Файл: <strong>{{ filename }}</strong> · всего найдено: <strong>{{ total }}</strong>.
-       Снимите галочки с лишнего и сохраните.</p>
+    <p>
+      {% if files|length == 1 %}Файл: <strong>{{ files[0].filename }}</strong>
+      {% else %}Файлов: <strong>{{ files|length }}</strong>{% endif %}
+      · всего найдено: <strong>{{ total }}</strong>.
+      Снимите галочки с лишнего и сохраните.
+    </p>
+    {% if files|length > 1 %}
+    <p class="text-sm muted">
+      Каждый файл сохранится отдельным письмом — у индикатора будет видно,
+      из какого документа он взят. Повторяющиеся значения показаны один раз.
+    </p>
+    {% endif %}
   </div>
 </div>
 
 <form method="post" action="{{ url_for('main.preview_save') }}" data-select-scope>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-  <input type="hidden" name="filename" value="{{ filename }}">
   <input type="hidden" name="notes" value="{{ notes }}">
   <input type="hidden" name="letter_number" value="{{ letter_number }}">
   <input type="hidden" name="letter_date" value="{{ letter_date }}">
-  <input type="hidden" name="stored_name" value="{{ stored_name }}">
-  <input type="hidden" name="content_type" value="{{ content_type }}">
-  <input type="hidden" name="file_size" value="{{ file_size }}">
-  <input type="hidden" name="pdf_stored_name" value="{{ pdf_stored_name }}">
-  <input type="hidden" name="pdf_original_name" value="{{ pdf_original_name }}">
-  <input type="hidden" name="pdf_size" value="{{ pdf_size }}">
+  {# Сведения о загруженных файлах: по ним создаются письма при сохранении. #}
+  <input type="hidden" name="files_json" value="{{ files_json }}">
   {# скрытые поля со всеми найденными значениями — для выгрузки CSV #}
   {% for it in groups.domains %}<input type="hidden" name="all_domain" value="{{ it.value }}">{% endfor %}
   {% for it in groups.ips %}<input type="hidden" name="all_ip" value="{{ it.value }}">{% endfor %}
@@ -96,6 +108,27 @@
     <span class="text-sm muted">Выбрано: <strong data-selected-count>0</strong></span>
   </div>
 
+  {% if files|length > 1 %}
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card__header">{{ ico.icon('file') }}<span class="card__title">Загруженные файлы</span></div>
+    <div class="card__body card__body--flush">
+      <table class="table">
+        <tbody>
+          {% for f in files %}
+          <tr>
+            <td>{{ f.filename }}</td>
+            <td class="num nowrap">
+              <span class="badge badge--neutral">{{ f.found }} индик.</span>
+              <span class="text-xs muted">{{ (f.file_size / 1024)|round|int }} КБ</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   <div data-tabs class="tabs">
     <button type="button" class="tab is-active" data-tab="dom">
       {{ ico.icon('globe', 'icon icon-sm') }} Домены <span class="tab__count">{{ groups.domains|length }}</span></button>
@@ -110,19 +143,19 @@
   <div>
     <div data-tab-panel="dom" class="tab-panel is-active">
       <p class="text-sm muted" style="margin-bottom:.5rem">Домены можно выгрузить в RPZ-зону.</p>
-      {{ rows_table('pvDom', groups.domains, 'dom', 'domain') }}
+      {{ rows_table('pvDom', groups.domains, 'dom', 'domain', files) }}
     </div>
     <div data-tab-panel="ip" class="tab-panel">
       <p class="text-sm muted" style="margin-bottom:.5rem">IP-адреса в RPZ не выгружаются — блокируются на межсетевом экране.</p>
-      {{ rows_table('pvIp', groups.ips, 'ip', 'ip') }}
+      {{ rows_table('pvIp', groups.ips, 'ip', 'ip', files) }}
     </div>
     <div data-tab-panel="url" class="tab-panel">
       <p class="text-sm muted" style="margin-bottom:.5rem">Пути RPZ не блокирует — хост при этом сохраняется во вкладке «Домены».</p>
-      {{ rows_table('pvUrl', groups.urls, 'url', 'url') }}
+      {{ rows_table('pvUrl', groups.urls, 'url', 'url', files) }}
     </div>
     <div data-tab-panel="hash" class="tab-panel">
       <p class="text-sm muted" style="margin-bottom:.5rem">Хеши сохраняются отдельным списком для SIEM.</p>
-      {{ rows_table('pvHash', groups.hashes, 'hash', 'hash') }}
+      {{ rows_table('pvHash', groups.hashes, 'hash', 'hash', files) }}
     </div>
   </div>
 </form>
