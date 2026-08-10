@@ -65,16 +65,28 @@ SQLite-файл создаётся в `/opt/fstec-rpz/instance/rpz.db`. Ката
 ## 4. Сервис gunicorn (systemd)
 
 ```bash
+# 1. Пользователь службы. Имена различаются между дистрибутивами
+#    (Debian/Ubuntu: www-data, ALT: apache2, RHEL: apache), поэтому надёжнее
+#    завести свою учётную запись — приложение слушает только 127.0.0.1 и
+#    совпадать с пользователем веб-сервера ему не нужно.
+sudo useradd -r -s /sbin/nologin socportal
+
 sudo cp deploy/soc-portal.service /etc/systemd/system/soc-portal.service
-# При необходимости поправьте User/Group и WorkingDirectory в файле.
-# Дать пользователю сервиса доступ к каталогу:
-sudo chown -R www-data:www-data /opt/fstec-rpz/instance
+# 2. ОБЯЗАТЕЛЬНО: вписать этого пользователя в юнит (в файле стоит заглушка).
+sudo sed -i 's/^User=.*/User=socportal/; s/^Group=.*/Group=socportal/' \
+    /etc/systemd/system/soc-portal.service
+
+# 3. Дать ему доступ к данным приложения.
+sudo chown -R socportal:socportal /opt/fstec-rpz/instance
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now soc-portal
 sudo systemctl status soc-portal     # должно быть active (running)
 curl -s http://127.0.0.1:8000/login | head   # проверка, что gunicorn отвечает
 ```
+
+> Если служба падает с `status=217/USER` — указанного пользователя в системе
+> нет. Проверить: `id <имя>`. Это самая частая ошибка на этом шаге.
 
 ## 5. Конфигурация веб-сервера
 
@@ -183,12 +195,27 @@ set -a && . ./.env && set +a && export FLASK_APP=run.py
 flask db upgrade
 
 # Старая служба заменяется новой (имя больше не отражало содержимое).
+# СНАЧАЛА запоминаем её пользователя: он владеет базой и файлами писем,
+# в новом юните на его месте стоит заглушка.
+SVC_USER=$(awk -F= '/^User=/{print $2}' /etc/systemd/system/fstec.service)
+SVC_GROUP=$(awk -F= '/^Group=/{print $2}' /etc/systemd/system/fstec.service)
+echo "было: User=$SVC_USER Group=$SVC_GROUP"     # не должно быть пусто
+
 sudo systemctl disable --now fstec
-sudo rm -f /etc/systemd/system/fstec.service
 sudo cp deploy/soc-portal.service /etc/systemd/system/soc-portal.service
+sudo sed -i "s/^User=.*/User=$SVC_USER/; s/^Group=.*/Group=$SVC_GROUP/" \
+    /etc/systemd/system/soc-portal.service
+
 sudo systemctl daemon-reload
 sudo systemctl enable --now soc-portal
+sudo systemctl status soc-portal
+
+# Убедились, что служба поднялась, — только теперь убираем старый юнит.
+sudo rm -f /etc/systemd/system/fstec.service && sudo systemctl daemon-reload
 ```
+
+> Если старый юнит уже удалён и `User` подсмотреть негде, возьмите владельца
+> данных приложения: `stat -c '%U:%G' /opt/fstec-rpz/instance`.
 
 Затем в конфиге веб-сервера замените блок `/fstec/` на блок `/soc/` из раздела 5
 (меняются сам путь, `X-Forwarded-Prefix` и добавляется таймаут) и перезагрузите
@@ -205,6 +232,10 @@ sudo systemctl enable --now soc-portal
 - **Как определить веб-сервер**, если не уверены: `sudo ss -ltnp | grep ':443'`
   покажет процесс (`nginx`, `httpd`, `httpd2` или `apache2`). Найти, где описан
   подпуть: `sudo grep -rn "/soc/" /etc/nginx/ /etc/httpd*/ /etc/apache2/`.
+- **`status=217/USER` при старте службы:** пользователя из `User=` нет в
+  системе. Имена различаются между дистрибутивами (`www-data`, `apache2`,
+  `apache`), поэтому в юните из репозитория стоит заглушка, которую нужно
+  заменить. Владельца данных подскажет `stat -c '%U:%G' /opt/fstec-rpz/instance`.
 - **Доступ к DNS-серверу:** SSH-подключение к BIND настраивается уже внутри
   приложения (раздел «Настройки»), на этапе развёртывания ничего не требуется.
 - **Сервис «Угрозы SkyDNS»** появляется вкладкой в боковой панели после

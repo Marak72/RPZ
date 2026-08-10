@@ -1,10 +1,27 @@
 # systemd-юнит для запуска портала ИБ через gunicorn.
-# Скопировать в /etc/systemd/system/soc-portal.service и поправить пути/пользователя.
 #
 #   sudo cp deploy/soc-portal.service /etc/systemd/system/soc-portal.service
+#   sudoedit /etc/systemd/system/soc-portal.service   # ОБЯЗАТЕЛЬНО: User/Group
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now soc-portal
 #   sudo systemctl status soc-portal
+#
+# ВНИМАНИЕ. User/Group ниже — заглушка, в разных дистрибутивах пользователи
+# называются по-разному. Если пользователя нет, служба падает сразу:
+#
+#   Failed at step USER spawning .../gunicorn: No such process
+#   Main process exited, code=exited, status=217/USER
+#
+# Какого пользователя ставить:
+#   * при обновлении — того же, что был раньше: он владеет базой и письмами,
+#     подсмотреть можно так: stat -c '%U:%G' /opt/fstec-rpz/instance
+#   * при установке с нуля — любого системного без shell; годится и владелец
+#     веб-сервера (Debian/Ubuntu: www-data, ALT: apache2, RHEL: apache),
+#     но своя учётная запись аккуратнее:
+#         sudo useradd -r -s /sbin/nologin socportal
+#
+# Приложение слушает только 127.0.0.1, поэтому совпадать с пользователем
+# веб-сервера ему не нужно.
 
 [Unit]
 Description=Portal IB: FSTEC RPZ and SkyDNS threats (gunicorn)
@@ -12,7 +29,7 @@ After=network.target
 
 [Service]
 Type=simple
-# Пользователь, от которого работает приложение (создайте при необходимости).
+# !!! ЗАМЕНИТЕ на существующего в системе пользователя (см. комментарий выше).
 User=www-data
 Group=www-data
 
