@@ -41,6 +41,7 @@ from ..web_utils import (
     csv_response,
     fmt_dt,
     operator_required,
+    safe_back,
     service_guard,
 )
 from .forms import ChecklistForm, CommentForm, QuickTaskForm, TaskForm
@@ -134,6 +135,14 @@ def _log(task: Task, field: str, old, new) -> None:
         task_id=task.id, user_id=current_user.id, field=field,
         old_value=old_text[:300], new_value=new_text[:300],
     ))
+
+
+def _task_back(task) -> str:
+    """Вернуться туда, откуда пришли, либо в карточку задачи."""
+    given = request.form.get("back") or ""
+    if given:
+        return safe_back("tasks.board", given)
+    return url_for("tasks.task_view", task_id=task.id)
 
 
 def _assignee_name(user_id) -> str:
@@ -393,8 +402,7 @@ def task_move(task_id: int):
     task.status = status
     _touch_closed(task, was_open)
     db.session.commit()
-    return redirect(request.form.get("back") or
-                    url_for("tasks.task_view", task_id=task.id))
+    return redirect(_task_back(task))
 
 
 @tasks_bp.route("/<int:task_id>/assign", methods=["POST"])
@@ -409,8 +417,7 @@ def task_assign(task_id: int):
          _assignee_name(new_id))
     task.assignee_id = new_id
     db.session.commit()
-    return redirect(request.form.get("back") or
-                    url_for("tasks.task_view", task_id=task.id))
+    return redirect(_task_back(task))
 
 
 @tasks_bp.route("/<int:task_id>/delete", methods=["POST"])
@@ -462,10 +469,7 @@ def task_quick():
 
 
 def _board_url() -> str:
-    back = request.form.get("back") or ""
-    if back.startswith("/"):
-        return back
-    return url_for("tasks.board")
+    return safe_back("tasks.board", request.form.get("back") or "")
 
 
 # --- Пункты выполнения ----------------------------------------------------

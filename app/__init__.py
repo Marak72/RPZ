@@ -45,10 +45,18 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(skydns_bp)
     app.register_blueprint(tasks_bp)
 
+    _register_template_helpers(app)
     _register_portal_context(app)
     _register_error_handlers(app)
     _register_cli(app)
     return app
+
+
+def _register_template_helpers(app: Flask) -> None:
+    """Помощники, нужные шаблонам всех сервисов."""
+    from .web_utils import current_url
+
+    app.jinja_env.globals["current_url"] = current_url
 
 
 def _register_portal_context(app: Flask) -> None:

@@ -41,7 +41,7 @@ def _client(config):
     application = create_app(config)
     with application.app_context():
         db.create_all()
-        user = User(username="op", role="operator")
+        user = User(username="op", role="admin")
         user.set_password("pass")
         db.session.add(user)
         db.session.flush()
@@ -129,3 +129,71 @@ def test_without_proxy_no_prefix_is_invented(client):
     body = client.get("/", headers=PREFIX_HEADERS).get_data(as_text=True)
     assert 'href="/fstec/"' in body
     assert "/soc/" not in body
+
+
+# --- возврат после действия не должен терять префикс -----------------------
+
+def _make_task(client):
+    client.post("/tasks/new", data={
+        "title": "Проверить", "status": "backlog", "priority": "normal",
+        "assignee_id": "0", "service_id": "", "submit": "1",
+    }, headers=PREFIX_HEADERS, follow_redirects=False)
+    from app.models import Task
+    return Task.query.one()
+
+
+def test_board_forms_carry_the_prefix_in_back_field(proxied_client):
+    """Поле возврата — это адрес страницы, а он живёт под префиксом.
+
+    request.full_path префикса не содержит, и подстановка его в форму
+    отправляла браузер на /tasks/ мимо приложения — прямо в веб-сервер.
+    """
+    body = proxied_client.get("/tasks/", headers=PREFIX_HEADERS).get_data(as_text=True)
+    assert 'name="back" value="/soc/tasks/' in body
+    assert 'name="back" value="/tasks/' not in body
+
+
+def test_move_returns_to_the_board_under_the_prefix(proxied_client):
+    task = _make_task(proxied_client)
+    response = proxied_client.post(
+        f"/tasks/{task.id}/move",
+        data={"status": "todo", "back": "/soc/tasks/"},
+        headers=PREFIX_HEADERS,
+    )
+    assert response.headers["Location"].endswith("/soc/tasks/")
+
+
+def test_stale_back_without_prefix_is_repaired(proxied_client):
+    """Ссылка из открытой ранее вкладки могла прийти без префикса."""
+    task = _make_task(proxied_client)
+    response = proxied_client.post(
+        f"/tasks/{task.id}/move",
+        data={"status": "todo", "back": "/tasks/"},
+        headers=PREFIX_HEADERS,
+    )
+    assert response.headers["Location"].endswith("/soc/tasks/")
+    assert "/soc/soc/" not in response.headers["Location"]
+
+
+def test_back_to_a_foreign_host_is_ignored(proxied_client):
+    task = _make_task(proxied_client)
+    response = proxied_client.post(
+        f"/tasks/{task.id}/move",
+        data={"status": "todo", "back": "//evil.example/phish"},
+        headers=PREFIX_HEADERS,
+    )
+    assert "evil.example" not in response.headers["Location"]
+
+
+def test_move_url_on_cards_carries_the_prefix(proxied_client):
+    task = _make_task(proxied_client)
+    body = proxied_client.get("/tasks/", headers=PREFIX_HEADERS).get_data(as_text=True)
+    assert f'data-move-url="/soc/tasks/{task.id}/move"' in body
+
+
+def test_quick_add_returns_under_the_prefix(proxied_client):
+    response = proxied_client.post("/tasks/quick", data={
+        "title": "Быстрая", "status": "todo", "assignee_id": "0",
+        "priority": "normal", "back": "/soc/tasks/", "submit_quick": "1",
+    }, headers=PREFIX_HEADERS)
+    assert response.headers["Location"].endswith("/soc/tasks/")

@@ -10,6 +10,38 @@ from flask import Response, abort
 from flask_login import current_user, login_required
 
 
+def current_url() -> str:
+    """Адрес текущей страницы вместе с префиксом подпути.
+
+    ``request.full_path`` префикса не содержит: за обратным прокси он лежит
+    в ``script_root``. Подставив full_path в поле возврата, мы отправляли
+    браузер мимо приложения — на /tasks/ вместо /soc/tasks/.
+    """
+    from flask import request
+
+    path = request.full_path
+    if path.endswith("?"):
+        path = path[:-1]
+    return (request.script_root or "") + path
+
+
+def safe_back(fallback_endpoint: str, given: str = "") -> str:
+    """Куда вернуться после действия: только внутрь этого приложения.
+
+    Значение приходит из формы, поэтому чужой адрес игнорируется — иначе
+    получился бы открытый редирект наружу.
+    """
+    from flask import request, url_for
+
+    root = request.script_root or ""
+    if given.startswith("/") and not given.startswith("//"):
+        # Ссылка без префикса пришла из старой вкладки — дополним.
+        if root and not given.startswith(root + "/") and given != root:
+            return root + given
+        return given
+    return url_for(fallback_endpoint)
+
+
 class LazyCounts:
     """Счётчики, которые считаются только если шаблон их спросил.
 

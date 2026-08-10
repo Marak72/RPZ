@@ -59,7 +59,7 @@
             class="board__quick hidden" data-quick-form>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="status" value="{{ col.code }}">
-        <input type="hidden" name="back" value="{{ request.full_path }}">
+        <input type="hidden" name="back" value="{{ current_url() }}">
         <input type="text" name="title" placeholder="Что нужно сделать" required>
         <select name="assignee_id">
           <option value="0">Исполнитель —</option>
@@ -89,7 +89,7 @@
 <form id="moveForm" method="post" class="hidden">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input type="hidden" name="status" data-move-status>
-  <input type="hidden" name="back" value="{{ request.full_path }}">
+  <input type="hidden" name="back" value="{{ current_url() }}">
 </form>
 {% endif %}
 {% endblock %}
