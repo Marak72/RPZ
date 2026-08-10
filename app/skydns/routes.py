@@ -28,6 +28,8 @@ from sqlalchemy import func
 
 from ..extensions import db
 from ..models import (
+    HOST_SOURCE_SIEM,
+    HOST_SOURCE_SKYDNS,
     JOB_FAILED,
     JOB_SUCCESS,
     STATUS_NEW,
@@ -39,6 +41,7 @@ from ..models import (
     THREAT_STATUSES,
     BlockEntry,
     SiemQueryLog,
+    SkydnsCategory,
     SkydnsSyncLog,
     ThreatDomain,
     ThreatHost,
@@ -47,19 +50,49 @@ from ..services import skydns_client
 from ..services.siem_client import SiemClient, SiemError
 from ..services.skydns_client import SkydnsClient, SkydnsError
 from ..settings_store import (
+    DEFAULT_SIEM_FILTER,
+    DEFAULT_SIEM_GROUP_FIELD,
+    DEFAULT_SKYDNS_LIMIT,
+    DEFAULT_SKYDNS_TZ,
+    KEY_SIEM_AUTH_MODE,
+    KEY_SIEM_AUTH_TYPE,
+    KEY_SIEM_CLIENT_ID,
+    KEY_SIEM_CLIENT_SECRET,
+    KEY_SIEM_FILTER,
+    KEY_SIEM_GROUP_FIELD,
+    KEY_SIEM_LIMIT,
+    KEY_SIEM_PASSWORD,
     KEY_SIEM_URL,
+    KEY_SIEM_USERNAME,
+    KEY_SIEM_VERIFY,
     KEY_SIEM_WINDOW,
+    KEY_SKYDNS_AUTO_DEVICES,
     KEY_SKYDNS_DAYS,
+    KEY_SKYDNS_LIMIT,
+    KEY_SKYDNS_PROFILE,
+    KEY_SKYDNS_TOKEN,
+    KEY_SKYDNS_TZ,
+    KEY_SKYDNS_URL,
+    KEY_SKYDNS_USER_ID,
+    KEY_SKYDNS_VERIFY,
+    get_bool,
     get_int,
     get_setting,
     get_siem_filter_template,
     get_siem_group_field,
-    get_skydns_categories,
     load_siem_config,
     load_skydns_config,
+    set_setting,
 )
 from ..web_utils import csv_response, fmt_dt, operator_required
-from .forms import ImportForm, ManualThreatForm, SyncForm, ThreatNotesForm
+from .forms import (
+    ImportForm,
+    ManualThreatForm,
+    SiemSettingsForm,
+    SkydnsSettingsForm,
+    SyncForm,
+    ThreatNotesForm,
+)
 
 skydns_bp = Blueprint("skydns", __name__, url_prefix="/skydns")
 
@@ -69,6 +102,8 @@ DEFAULT_SYNC_DAYS = 7
 # Сколько доменов разрешаем обработать за один пакетный запрос в SIEM:
 # каждый домен — отдельный запрос, длинная пачка упрётся в таймаут веб-сервера.
 BATCH_LIMIT = 25
+# Сколько доменов опрашиваем в SkyDNS на устройства за одну выгрузку.
+DEVICE_BATCH = 40
 
 
 def _back_url(default_endpoint: str = "skydns.domains") -> str:
@@ -307,6 +342,7 @@ def _apply_hits(threat: ThreatDomain, hits) -> int:
                 threat_id=threat.id,
                 address=hit.address,
                 hostname=hit.hostname or "",
+                source=HOST_SOURCE_SIEM,
                 first_seen=hit.first_seen or now,
                 # Значение по умолчанию появится только при вставке,
                 # а счётчик сравнивается прямо сейчас.
@@ -522,17 +558,56 @@ def host_view():
 
 # --- Загрузка статистики --------------------------------------------------
 
-def _upsert_stats(stats, source: str) -> tuple[int, int]:
-    """Сохранить статистику, оставив только категории безопасности."""
-    allowed = get_skydns_categories()
+def _catalogue() -> dict:
+    """Справочник категорий SkyDNS из базы."""
+    return {cat.id: cat for cat in SkydnsCategory.query.all()}
+
+
+def _tracked_ids() -> list:
+    """ID категорий, попадающих в разбор.
+
+    Основной источник — флаг ``is_dangerous`` из ответа SkyDNS; ручное
+    переопределение в справочнике важнее его.
+    """
+    rows = SkydnsCategory.query.all()
+    if not rows:
+        # Справочник ещё не загружен — берём перечень из инструкции.
+        return sorted(skydns_client.DANGEROUS_CATEGORY_IDS)
+    return sorted(cat.id for cat in rows if cat.is_tracked)
+
+
+def _sync_categories(client, start: date, end: date) -> int:
+    """Обновить справочник категорий. Возвращает число опасных категорий."""
+    categories = client.categories(start, end)
+    known = _catalogue()
+    for item in categories:
+        row = known.get(item.id)
+        if row is None:
+            row = SkydnsCategory(id=item.id)
+            db.session.add(row)
+        row.title = item.title or row.title or ""
+        row.is_dangerous = item.is_dangerous
+    db.session.commit()
+    return sum(1 for c in categories if c.is_dangerous)
+
+
+def _upsert_stats(stats, source: str, tracked: set | None = None) -> tuple:
+    """Сохранить статистику по доменам.
+
+    ``tracked`` — множество ID отслеживаемых категорий. Если оно задано,
+    домен без пересечения с ним пропускается (API уже фильтрует по ``cats``,
+    но отчёт может содержать и смежные категории домена).
+    """
+    catalogue = _catalogue()
     now = datetime.utcnow()
     total = new = 0
 
     for stat in stats:
-        if source != THREAT_SOURCE_MANUAL and not skydns_client.is_security_category(
-            stat.category, stat.category_title, allowed
-        ):
+        cat_ids = [int(c) for c in (stat.cat_ids or [])]
+        if tracked is not None and cat_ids and not (set(cat_ids) & tracked):
             continue
+
+        primary, titles = skydns_client.describe_categories(cat_ids, catalogue)
         total += 1
         threat = ThreatDomain.query.filter_by(domain=stat.domain).first()
         if threat is None:
@@ -552,15 +627,48 @@ def _upsert_stats(stats, source: str) -> tuple[int, int]:
         # Счётчики приходят за период выборки — берём максимум, а не затираем.
         threat.requests_count = max(threat.requests_count or 0, stat.requests)
         threat.blocks_count = max(threat.blocks_count or 0, stat.blocks)
-        if stat.category:
-            threat.category = stat.category
-        if stat.category_title:
-            threat.category_title = stat.category_title
-        if stat.profile:
-            threat.profile = stat.profile
+        if cat_ids:
+            threat.cat_ids = ",".join(str(c) for c in cat_ids)
+        # Категория из CSV/ручного ввода приходит строкой, из API — списком id.
+        threat.category = primary or stat.category or threat.category
+        threat.category_title = titles or stat.category_title or threat.category_title
 
     db.session.commit()
     return total, new
+
+
+def _apply_devices(threat: ThreatDomain, devices) -> tuple:
+    """Сохранить устройства SkyDNS как конечные хосты.
+
+    Записи с ``token == 0`` — трафик через шлюз: конечный хост по ним
+    неизвестен, их считаем отдельно и показываем как повод идти в SIEM.
+    """
+    existing = {host.address: host for host in threat.hosts}
+    now = datetime.utcnow()
+    added = gateway = 0
+
+    for device in devices:
+        if device.is_gateway:
+            gateway += 1
+            continue
+        for address in device.addresses:
+            host = existing.get(address)
+            if host is None:
+                host = ThreatHost(
+                    threat_id=threat.id,
+                    address=address,
+                    source=HOST_SOURCE_SKYDNS,
+                    events_count=0,
+                    first_seen=now,
+                )
+                db.session.add(host)
+                existing[address] = host
+                added += 1
+            host.events_count = max(host.events_count or 0, device.requests)
+            host.device_token = str(device.token)
+            host.last_seen = now
+            host.found_at = now
+    return added, gateway
 
 
 @skydns_bp.route("/sync", methods=["GET", "POST"])
@@ -594,7 +702,10 @@ def sync():
         sync_form=sync_form,
         import_form=import_form,
         manual_form=manual_form,
-        categories=get_skydns_categories(),
+        categories=SkydnsCategory.query.order_by(
+            SkydnsCategory.is_dangerous.desc(), SkydnsCategory.title
+        ).all(),
+        tracked_count=len(_tracked_ids()),
         skydns_configured=load_skydns_config().is_configured,
         recent=SkydnsSyncLog.query.order_by(
             SkydnsSyncLog.started_at.desc()
@@ -617,8 +728,21 @@ def _do_api_sync(form):
     )
     db.session.add(log)
 
+    client = SkydnsClient(load_skydns_config())
     try:
-        stats = SkydnsClient(load_skydns_config()).fetch_domains(start, end)
+        # 1. Справочник категорий: SkyDNS сам помечает опасные.
+        dangerous = _sync_categories(client, start, end)
+        tracked = _tracked_ids()
+        if not tracked:
+            raise SkydnsError(
+                "Ни одна категория не отмечена как отслеживаемая — "
+                "проверьте справочник категорий."
+            )
+        # 2. Домены только отслеживаемых категорий.
+        stats = client.domains(
+            start, end, cats=tracked,
+            limit=get_int(KEY_SKYDNS_LIMIT, DEFAULT_SKYDNS_LIMIT),
+        )
     except SkydnsError as exc:
         log.status = JOB_FAILED
         log.finished_at = datetime.utcnow()
@@ -635,22 +759,57 @@ def _do_api_sync(form):
         flash(f"Непредвиденная ошибка выгрузки: {exc}", "danger")
         return redirect(url_for("skydns.sync"))
 
-    total, new = _upsert_stats(stats, THREAT_SOURCE_API)
+    total, new = _upsert_stats(stats, THREAT_SOURCE_API, tracked=set(tracked))
+
+    # 3. Устройства: часть конечных хостов SkyDNS знает сам, без SIEM.
+    devices_found = 0
+    if get_bool(KEY_SKYDNS_AUTO_DEVICES, True) and total:
+        devices_found = _collect_devices(client, start, end)
+
     log.status = JOB_SUCCESS
     log.finished_at = datetime.utcnow()
     log.domains_total = total
     log.domains_new = new
     log.message = (
-        f"Строк в ответе: {len(stats)}; относятся к безопасности: {total}; "
-        f"новых: {new}."
+        f"Опасных категорий в справочнике: {dangerous}; отслеживается: "
+        f"{len(tracked)}. Доменов в ответе: {len(stats)}; сохранено: {total}; "
+        f"новых: {new}; хостов от SkyDNS: {devices_found}."
     )
     db.session.commit()
     flash(
-        f"Из SkyDNS получено строк: {len(stats)}. "
-        f"Опасных доменов: {total}, из них новых: {new}.",
+        f"Из SkyDNS получено доменов: {len(stats)}. Сохранено: {total}, "
+        f"из них новых: {new}. Хостов найдено сразу: {devices_found}.",
         "success",
     )
     return redirect(url_for("skydns.domains"))
+
+
+def _collect_devices(client, start: date, end: date) -> int:
+    """Запросить устройства по свежим доменам одним обращением к SkyDNS."""
+    threats = (
+        ThreatDomain.query.order_by(ThreatDomain.last_seen.desc())
+        .limit(DEVICE_BATCH)
+        .all()
+    )
+    if not threats:
+        return 0
+
+    found = 0
+    for threat in threats:
+        try:
+            devices = client.devices(start, end, domains=[threat.domain])
+        except SkydnsError:
+            current_app.logger.exception(
+                "Не удалось получить устройства SkyDNS для %s", threat.domain
+            )
+            continue
+        added, _gateway = _apply_devices(threat, devices)
+        if added:
+            db.session.flush()
+            threat.siem_hosts_count = threat.hosts.count()
+            found += added
+    db.session.commit()
+    return found
 
 
 def _do_csv_import(form):
@@ -659,7 +818,7 @@ def _do_csv_import(form):
 
     data = form.report.data.read()
     try:
-        stats = skydns_client.parse_csv(data, load_skydns_config().field_map)
+        stats = skydns_client.parse_csv(data)
     except SkydnsError as exc:
         log.status = JOB_FAILED
         log.finished_at = datetime.utcnow()
@@ -674,13 +833,12 @@ def _do_csv_import(form):
     log.domains_total = total
     log.domains_new = new
     log.message = (
-        f"Строк в файле: {len(stats)}; относятся к безопасности: {total}; "
-        f"новых: {new}."
+        f"Строк в файле: {len(stats)}; сохранено: {total}; новых: {new}."
     )
     db.session.commit()
     flash(
         f"Из файла разобрано строк: {len(stats)}. "
-        f"Опасных доменов: {total}, из них новых: {new}.",
+        f"Сохранено доменов: {total}, из них новых: {new}.",
         "success",
     )
     return redirect(url_for("skydns.domains"))
@@ -688,10 +846,12 @@ def _do_csv_import(form):
 
 def _do_manual_add(form):
     raw = [line.strip().lower() for line in (form.values.data or "").splitlines()]
+    category = (form.category.data or "добавлен вручную").strip()
     stats = [
         skydns_client.DomainStat(
             domain=line.strip(".").lstrip("*."),
-            category=(form.category.data or "manual").strip(),
+            category=category,
+            category_title=category,
         )
         for line in raw
         if line and "." in line and not line.startswith("#")
@@ -703,6 +863,34 @@ def _do_manual_add(form):
     total, new = _upsert_stats(stats, THREAT_SOURCE_MANUAL)
     flash(f"Добавлено доменов: {total}, из них новых: {new}.", "success")
     return redirect(url_for("skydns.domains"))
+
+
+# --- Справочник категорий -------------------------------------------------
+
+@skydns_bp.route("/categories", methods=["GET", "POST"])
+@login_required
+def categories():
+    """Справочник категорий SkyDNS и выбор отслеживаемых."""
+    if request.method == "POST":
+        if not current_user.is_operator:
+            flash("Изменение доступно только операторам.", "danger")
+            return redirect(url_for("skydns.categories"))
+        tracked = {int(v) for v in request.form.getlist("tracked", type=int)}
+        for cat in SkydnsCategory.query.all():
+            wanted = cat.id in tracked
+            # Храним только осознанное отличие от флага SkyDNS.
+            cat.track_override = None if wanted == cat.is_dangerous else wanted
+        db.session.commit()
+        flash("Список отслеживаемых категорий сохранён.", "success")
+        return redirect(url_for("skydns.categories"))
+
+    return render_template(
+        "skydns/categories.html",
+        items=SkydnsCategory.query.order_by(
+            SkydnsCategory.is_dangerous.desc(), SkydnsCategory.title
+        ).all(),
+        fallback=skydns_client.DANGEROUS_CATEGORY_IDS,
+    )
 
 
 # --- Передача домена в блокировку RPZ -------------------------------------
@@ -758,4 +946,149 @@ def logs():
         syncs=SkydnsSyncLog.query.order_by(
             SkydnsSyncLog.started_at.desc()
         ).limit(20).all(),
+    )
+
+
+# --- Настройки сервиса ----------------------------------------------------
+
+def _siem_form() -> SiemSettingsForm:
+    return SiemSettingsForm(
+        base_url=get_setting(KEY_SIEM_URL),
+        auth_mode=get_setting(KEY_SIEM_AUTH_MODE, "session"),
+        auth_type=get_setting(KEY_SIEM_AUTH_TYPE, "local"),
+        username=get_setting(KEY_SIEM_USERNAME),
+        client_id=get_setting(KEY_SIEM_CLIENT_ID, "mpx"),
+        verify_ssl=get_bool(KEY_SIEM_VERIFY, False),
+        filter_template=get_setting(KEY_SIEM_FILTER, DEFAULT_SIEM_FILTER),
+        group_field=get_setting(KEY_SIEM_GROUP_FIELD, DEFAULT_SIEM_GROUP_FIELD),
+        window_hours=get_int(KEY_SIEM_WINDOW, DEFAULT_WINDOW_HOURS),
+        limit=get_int(KEY_SIEM_LIMIT, 500),
+    )
+
+
+def _skydns_form() -> SkydnsSettingsForm:
+    from ..services.skydns_client import DEFAULT_BASE_URL
+
+    return SkydnsSettingsForm(
+        base_url=get_setting(KEY_SKYDNS_URL, DEFAULT_BASE_URL),
+        user_id=get_setting(KEY_SKYDNS_USER_ID),
+        profile_ids=get_setting(KEY_SKYDNS_PROFILE),
+        timezone=get_setting(KEY_SKYDNS_TZ, DEFAULT_SKYDNS_TZ),
+        days=get_int(KEY_SKYDNS_DAYS, DEFAULT_SYNC_DAYS),
+        limit=get_int(KEY_SKYDNS_LIMIT, DEFAULT_SKYDNS_LIMIT),
+        auto_devices=get_bool(KEY_SKYDNS_AUTO_DEVICES, True),
+        verify_ssl=get_bool(KEY_SKYDNS_VERIFY, True),
+    )
+
+
+@skydns_bp.route("/settings", methods=["GET", "POST"])
+@operator_required
+def settings():
+    """Настройки сервиса: подключения к SkyDNS и MaxPatrol SIEM."""
+    siem_form = _siem_form()
+    skydns_form = _skydns_form()
+
+    def _render():
+        return render_template(
+            "skydns/settings.html",
+            siem_form=siem_form,
+            skydns_form=skydns_form,
+            siem_password_set=bool(get_setting(KEY_SIEM_PASSWORD)),
+            skydns_token_set=bool(get_setting(KEY_SKYDNS_TOKEN)),
+            siem_filter_default=DEFAULT_SIEM_FILTER,
+        )
+
+    if (siem_form.submit_siem.data or siem_form.test_siem.data) \
+            and siem_form.validate_on_submit():
+        _save_siem(siem_form)
+        db.session.commit()
+        if siem_form.test_siem.data:
+            _test_siem()
+            return _render()
+        flash("Настройки MaxPatrol SIEM сохранены.", "success")
+        return redirect(url_for("skydns.settings"))
+
+    if (skydns_form.submit_skydns.data or skydns_form.test_skydns.data) \
+            and skydns_form.validate_on_submit():
+        _save_skydns(skydns_form)
+        db.session.commit()
+        if skydns_form.test_skydns.data:
+            _test_skydns()
+            return _render()
+        flash("Настройки SkyDNS сохранены.", "success")
+        return redirect(url_for("skydns.settings"))
+
+    return _render()
+
+
+def _save_siem(form) -> None:
+    set_setting(KEY_SIEM_URL, (form.base_url.data or "").strip())
+    set_setting(KEY_SIEM_AUTH_MODE, form.auth_mode.data or "session")
+    set_setting(KEY_SIEM_AUTH_TYPE, form.auth_type.data or "local")
+    set_setting(KEY_SIEM_USERNAME, (form.username.data or "").strip())
+    set_setting(KEY_SIEM_CLIENT_ID, (form.client_id.data or "").strip())
+    set_setting(KEY_SIEM_VERIFY, "1" if form.verify_ssl.data else "0")
+    set_setting(KEY_SIEM_FILTER,
+                (form.filter_template.data or DEFAULT_SIEM_FILTER).strip())
+    set_setting(KEY_SIEM_GROUP_FIELD,
+                (form.group_field.data or DEFAULT_SIEM_GROUP_FIELD).strip())
+    if form.window_hours.data:
+        set_setting(KEY_SIEM_WINDOW, str(form.window_hours.data))
+    if form.limit.data:
+        set_setting(KEY_SIEM_LIMIT, str(form.limit.data))
+    # Секреты перезаписываются, только если их ввели заново.
+    if form.password.data:
+        set_setting(KEY_SIEM_PASSWORD, form.password.data, is_secret=True)
+    if form.client_secret.data:
+        set_setting(KEY_SIEM_CLIENT_SECRET, form.client_secret.data, is_secret=True)
+
+
+def _save_skydns(form) -> None:
+    set_setting(KEY_SKYDNS_URL, (form.base_url.data or "").strip())
+    set_setting(KEY_SKYDNS_USER_ID, (form.user_id.data or "").strip())
+    set_setting(KEY_SKYDNS_PROFILE, (form.profile_ids.data or "").strip())
+    set_setting(KEY_SKYDNS_TZ, (form.timezone.data or DEFAULT_SKYDNS_TZ).strip())
+    set_setting(KEY_SKYDNS_VERIFY, "1" if form.verify_ssl.data else "0")
+    set_setting(KEY_SKYDNS_AUTO_DEVICES, "1" if form.auto_devices.data else "0")
+    if form.days.data:
+        set_setting(KEY_SKYDNS_DAYS, str(form.days.data))
+    if form.limit.data:
+        set_setting(KEY_SKYDNS_LIMIT, str(form.limit.data))
+    if form.token.data:
+        set_setting(KEY_SKYDNS_TOKEN, form.token.data.strip(), is_secret=True)
+
+
+def _test_siem() -> None:
+    """Проверить вход в SIEM без выполнения поискового запроса."""
+    try:
+        client = SiemClient(load_siem_config())
+        client.login()
+        client.close()
+    except SiemError as exc:
+        flash(str(exc), "danger")
+        return
+    except Exception as exc:  # noqa: BLE001
+        current_app.logger.exception("Ошибка проверки подключения к SIEM")
+        flash(f"Непредвиденная ошибка проверки SIEM: {exc}", "danger")
+        return
+    flash("Подключение к MaxPatrol SIEM успешно: вход выполнен.", "success")
+
+
+def _test_skydns() -> None:
+    """Проверить токен SkyDNS лёгким методом get_total_activity."""
+    today = date.today()
+    try:
+        totals = SkydnsClient(load_skydns_config()).total_activity(today, today)
+    except SkydnsError as exc:
+        flash(str(exc), "danger")
+        return
+    except Exception as exc:  # noqa: BLE001
+        current_app.logger.exception("Ошибка проверки подключения к SkyDNS")
+        flash(f"Непредвиденная ошибка проверки SkyDNS: {exc}", "danger")
+        return
+    flash(
+        "Подключение к SkyDNS успешно. За сегодня запросов: "
+        f"{totals.get('requests', 0)}, блокировок: {totals.get('blocks', 0)}, "
+        f"опасных запросов: {totals.get('dangerous_requests', 0)}.",
+        "success",
     )

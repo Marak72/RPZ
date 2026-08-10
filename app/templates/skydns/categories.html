@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Категории SkyDNS{% endblock %}
+{% block subheading %}<div class="topbar__sub">Что попадает в разбор</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Категории SkyDNS</h2>
+    <p>Справочник загружается вместе со статистикой. SkyDNS сам помечает опасные
+       категории — их и берём по умолчанию, но выбор можно поправить руками.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('skydns.sync') }}">
+      {{ ico.icon('download') }} Загрузить статистику</a>
+  </div>
+</div>
+
+{% if not items %}
+<div class="card">
+  <div class="empty">
+    {{ ico.icon('hash') }}
+    <div class="empty__title">Справочник ещё не загружен</div>
+    <div class="empty__text">
+      Он заполняется при первой выгрузке из API SkyDNS. Пока справочника нет,
+      используется перечень категорий угроз из инструкции:
+    </div>
+    <div class="inline" style="justify-content:center">
+      {% for cid, title in fallback.items() %}
+      <span class="badge badge--danger">{{ cid }} · {{ title }}</span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% else %}
+<form method="post">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="card">
+    <div class="toolbar">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" placeholder="Фильтр по названию" data-filter="catTable" data-search-focus>
+      </div>
+      <div class="toolbar__spacer"></div>
+      <span class="text-xs muted">
+        Отмеченные категории попадают в выгрузку доменов (параметр <code>cats</code>).
+      </span>
+    </div>
+
+    <div class="table-wrap">
+      <table class="table" id="catTable">
+        <thead>
+          <tr>
+            <th class="col-check">В разбор</th>
+            <th class="num">ID</th>
+            <th>Категория</th>
+            <th>Оценка SkyDNS</th>
+            <th>Настройка</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for cat in items %}
+          <tr>
+            <td class="col-check">
+              <input type="checkbox" name="tracked" value="{{ cat.id }}"
+                     {% if cat.is_tracked %}checked{% endif %}
+                     {% if not current_user.is_operator %}disabled{% endif %}>
+            </td>
+            <td class="num muted">{{ cat.id }}</td>
+            <td data-value="{{ cat.title }}">{{ cat.title or '—' }}</td>
+            <td>
+              {% if cat.is_dangerous %}<span class="badge badge--danger">опасная</span>
+              {% else %}<span class="badge badge--neutral">обычная</span>{% endif %}
+            </td>
+            <td class="text-xs muted">
+              {% if cat.track_override is none %}как у SkyDNS
+              {% elif cat.track_override %}<span class="badge badge--warning">включена вручную</span>
+              {% else %}<span class="badge badge--neutral">исключена вручную</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if current_user.is_operator %}
+    <div class="card__footer">
+      <button class="btn btn--primary">{{ ico.icon('check') }} Сохранить выбор</button>
+      <span class="text-xs muted" style="margin-left:.5rem">
+        Снятая галочка у опасной категории и поставленная у обычной сохраняются
+        как ручное переопределение.
+      </span>
+    </div>
+    {% endif %}
+  </div>
+</form>
+{% endif %}
+{% endblock %}

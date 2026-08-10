@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Настройки{% endblock %}
+{% block subheading %}<div class="topbar__sub">Настройки сервиса «Угрозы SkyDNS»</div>{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Подключения сервиса</h2>
+    <p>Откуда берутся домены и где ищутся конечные хосты, которые к ним обращались.
+       Токены и пароли хранятся в базе в зашифрованном виде.</p>
+  </div>
+</div>
+
+<form method="post">
+  {{ skydns_form.hidden_tag() }}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('globe') }}<span class="card__title">SkyDNS · Proxy Stat API</span></div>
+    <div class="card__body">
+      <div class="row">
+        <div class="field" style="flex:2">
+          {{ skydns_form.base_url.label(class="label") }}
+          {{ skydns_form.base_url(placeholder="https://skydns.ru") }}
+        </div>
+        <div class="field">
+          {{ skydns_form.user_id.label(class="label") }}
+          {{ skydns_form.user_id(placeholder="123") }}
+        </div>
+      </div>
+      <div class="help" style="margin-top:-.5rem">
+        Запросы уходят на
+        <code>{{ (skydns_form.base_url.data or 'https://skydns.ru').rstrip('/') }}/cabinet/rest_api/statistics/users/<strong>{{ skydns_form.user_id.data or '{user_id}' }}</strong>/proxy/v2/&lt;метод&gt;/</code>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ skydns_form.token.label(class="label") }}
+          {{ skydns_form.token(autocomplete="new-password") }}
+          <div class="help">
+            {% if skydns_token_set %}Токен сохранён. Оставьте пустым, чтобы не менять.
+            {% else %}Токен выпускается SkyDNS отдельно под каждого клиента.{% endif %}
+            Передаётся заголовком <code>Authorization: Token …</code>
+          </div>
+        </div>
+        <div class="field">
+          {{ skydns_form.profile_ids.label(class="label") }}
+          {{ skydns_form.profile_ids(placeholder="0, 1121, 1470") }}
+          <div class="help">Пусто — отчёт по всем профилям. Профиль анонимных — <code>0</code>.</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ skydns_form.timezone.label(class="label") }}
+          {{ skydns_form.timezone(placeholder="Asia/Yekaterinburg") }}
+          <div class="help">Имя из базы TZ. От него зависят границы суток в отчётах.</div>
+        </div>
+        <div class="field">
+          {{ skydns_form.days.label(class="label") }}
+          {{ skydns_form.days() }}
+        </div>
+        <div class="field">
+          {{ skydns_form.limit.label(class="label") }}
+          {{ skydns_form.limit() }}
+        </div>
+      </div>
+
+      <div class="check">
+        {{ skydns_form.auto_devices() }}
+        <div>
+          {{ skydns_form.auto_devices.label() }}
+          <div class="help">
+            Метод <code>get_devices_activity</code> сразу отдаёт устройства с агентом
+            SkyDNS — по ним конечный хост известен без обращения к SIEM. Записи
+            с <code>token = 0</code> — трафик через шлюз, их всё равно нужно искать в SIEM.
+          </div>
+        </div>
+      </div>
+      <div class="check">
+        {{ skydns_form.verify_ssl() }}
+        <div>{{ skydns_form.verify_ssl.label() }}</div>
+      </div>
+    </div>
+    <div class="card__footer">
+      <div class="btn-group">
+        {{ skydns_form.submit_skydns(class="btn btn--primary") }}
+        {{ skydns_form.test_skydns(class="btn") }}
+        <span class="text-xs muted">Проверка вызывает только сводку за сегодня.</span>
+      </div>
+    </div>
+  </div>
+</form>
+
+<form method="post" class="mt-2">
+  {{ siem_form.hidden_tag() }}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('search') }}<span class="card__title">MaxPatrol SIEM</span></div>
+    <div class="card__body">
+      <div class="field">
+        {{ siem_form.base_url.label(class="label") }}
+        {{ siem_form.base_url(placeholder="https://siem.example.local") }}
+        <div class="help">Адрес веб-интерфейса без пути. Порт компонента Core
+          (<code>3334</code>) подставляется автоматически для входа и выдачи токена.</div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ siem_form.auth_mode.label(class="label") }}
+          {{ siem_form.auth_mode() }}
+        </div>
+        <div class="field">
+          {{ siem_form.auth_type.label(class="label") }}
+          {{ siem_form.auth_type() }}
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ siem_form.username.label(class="label") }}
+          {{ siem_form.username(autocomplete="off") }}
+        </div>
+        <div class="field">
+          {{ siem_form.password.label(class="label") }}
+          {{ siem_form.password(autocomplete="new-password") }}
+          {% if siem_password_set %}<div class="help">Пароль сохранён.</div>{% endif %}
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ siem_form.client_id.label(class="label") }}
+          {{ siem_form.client_id(placeholder="mpx") }}
+        </div>
+        <div class="field">
+          {{ siem_form.client_secret.label(class="label") }}
+          {{ siem_form.client_secret(autocomplete="new-password") }}
+        </div>
+      </div>
+      <div class="help" style="margin-top:-.5rem">
+        Нужны только для режима токена. На сервере SIEM значение можно посмотреть так:
+        <code>sudo grep ClientSecret /var/lib/deployer/role_instances/core*/params.yaml</code>
+      </div>
+
+      <hr class="divider">
+      <div class="section-title">Поисковый запрос</div>
+
+      <div class="field">
+        {{ siem_form.filter_template.label(class="label") }}
+        {{ siem_form.filter_template(placeholder=siem_filter_default) }}
+        <div class="help">
+          Фильтр событий. Плейсхолдер <code>{domain}</code> заменяется на проверяемый домен.
+          По умолчанию: <code>{{ siem_filter_default }}</code>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          {{ siem_form.group_field.label(class="label") }}
+          {{ siem_form.group_field(placeholder="dst.host") }}
+          <div class="help">Значения этого поля и есть искомые конечные хосты.</div>
+        </div>
+        <div class="field">
+          {{ siem_form.window_hours.label(class="label") }}
+          {{ siem_form.window_hours() }}
+        </div>
+        <div class="field">
+          {{ siem_form.limit.label(class="label") }}
+          {{ siem_form.limit() }}
+        </div>
+      </div>
+      <div class="check">
+        {{ siem_form.verify_ssl() }}
+        <div>
+          {{ siem_form.verify_ssl.label() }}
+          <div class="help">Выключено по умолчанию: у SIEM обычно самоподписанный сертификат.</div>
+        </div>
+      </div>
+    </div>
+    <div class="card__footer">
+      <div class="btn-group">
+        {{ siem_form.submit_siem(class="btn btn--primary") }}
+        {{ siem_form.test_siem(class="btn") }}
+        <span class="text-xs muted">Проверка выполняет только вход, без поиска событий.</span>
+      </div>
+    </div>
+  </div>
+</form>
+{% endblock %}

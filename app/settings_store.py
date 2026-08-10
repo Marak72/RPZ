@@ -12,17 +12,16 @@ from .models import AppSetting
 KEY_VT_API = "vt_api_key"
 KEY_PROTECTED = "protected_domains"
 
-# --- SkyDNS ---------------------------------------------------------------
+# --- SkyDNS (Proxy Stat API) ----------------------------------------------
 KEY_SKYDNS_URL = "skydns_base_url"
-KEY_SKYDNS_LOGIN = "skydns_login"
-KEY_SKYDNS_PASSWORD = "skydns_password"          # секрет
-KEY_SKYDNS_TOKEN = "skydns_token"                # секрет (если API по токену)
-KEY_SKYDNS_PROFILE = "skydns_profile"            # ident/профиль организации
-KEY_SKYDNS_CATEGORIES = "skydns_categories"      # отслеживаемые категории
+KEY_SKYDNS_USER_ID = "skydns_user_id"            # {user_id} в адресе API
+KEY_SKYDNS_TOKEN = "skydns_token"                # секрет: Authorization: Token
+KEY_SKYDNS_PROFILE = "skydns_profile"            # profile_ids через запятую
+KEY_SKYDNS_TZ = "skydns_timezone"                # timezone для отчётов
 KEY_SKYDNS_DAYS = "skydns_days"                  # глубина выборки, дней
 KEY_SKYDNS_VERIFY = "skydns_verify_ssl"
-KEY_SKYDNS_STATS_PATH = "skydns_stats_path"      # путь метода статистики
-KEY_SKYDNS_MAP = "skydns_field_map"              # сопоставление полей ответа
+KEY_SKYDNS_LIMIT = "skydns_limit"                # лимит доменов в отчёте
+KEY_SKYDNS_AUTO_DEVICES = "skydns_auto_devices"  # искать устройства при выгрузке
 
 # --- MaxPatrol SIEM -------------------------------------------------------
 KEY_SIEM_URL = "siem_base_url"
@@ -43,18 +42,8 @@ KEY_SIEM_LIMIT = "siem_limit"                    # максимум строк �
 DEFAULT_SIEM_FILTER = 'datafield1 = "{domain}" or datafield3 = "{domain}"'
 DEFAULT_SIEM_GROUP_FIELD = "dst.host"
 
-# Категории SkyDNS, связанные с безопасностью. Реальные коды подставляются
-# из инструкции SkyDNS — здесь разумный стартовый набор.
-DEFAULT_SKYDNS_CATEGORIES = "\n".join((
-    "malware",
-    "botnet",
-    "phishing",
-    "spam",
-    "spyware",
-    "cryptomining",
-    "compromised",
-    "anonymizer",
-))
+DEFAULT_SKYDNS_TZ = "Asia/Yekaterinburg"
+DEFAULT_SKYDNS_LIMIT = 500
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -114,12 +103,6 @@ def get_protected_domains() -> set[str]:
     }
 
 
-def get_skydns_categories() -> list[str]:
-    """Категории SkyDNS, которые считаем угрозами безопасности."""
-    raw = get_setting(KEY_SKYDNS_CATEGORIES, DEFAULT_SKYDNS_CATEGORIES)
-    return [line.lower() for line in _lines(raw)]
-
-
 def get_siem_filter_template() -> str:
     return get_setting(KEY_SIEM_FILTER, DEFAULT_SIEM_FILTER)
 
@@ -146,30 +129,14 @@ def load_siem_config():
 
 
 def load_skydns_config():
-    """Собрать параметры подключения к SkyDNS из настроек."""
-    import json
-
-    from .services.skydns_client import (
-        DEFAULT_BASE_URL,
-        DEFAULT_STATS_PATH,
-        SkydnsConfig,
-    )
-
-    raw_map = get_setting(KEY_SKYDNS_MAP, "")
-    try:
-        field_map = json.loads(raw_map) if raw_map.strip() else {}
-    except (ValueError, TypeError):
-        field_map = {}
-    if not isinstance(field_map, dict):
-        field_map = {}
+    """Собрать параметры подключения к Proxy Stat API SkyDNS из настроек."""
+    from .services.skydns_client import DEFAULT_BASE_URL, SkydnsConfig
 
     return SkydnsConfig(
         base_url=get_setting(KEY_SKYDNS_URL, DEFAULT_BASE_URL),
-        stats_path=get_setting(KEY_SKYDNS_STATS_PATH, DEFAULT_STATS_PATH),
-        login=get_setting(KEY_SKYDNS_LOGIN),
-        password=get_setting(KEY_SKYDNS_PASSWORD),
+        user_id=get_setting(KEY_SKYDNS_USER_ID),
         token=get_setting(KEY_SKYDNS_TOKEN),
-        profile=get_setting(KEY_SKYDNS_PROFILE),
+        profile_ids=get_setting(KEY_SKYDNS_PROFILE),
+        timezone=get_setting(KEY_SKYDNS_TZ, DEFAULT_SKYDNS_TZ),
         verify_ssl=get_bool(KEY_SKYDNS_VERIFY, True),
-        field_map=field_map,
     )

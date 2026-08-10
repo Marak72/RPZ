@@ -15,6 +15,7 @@ from app.extensions import db  # noqa: E402
 from app.models import (  # noqa: E402
     BlockEntry,
     SiemQueryLog,
+    SkydnsCategory,
     ThreatDomain,
     ThreatHost,
     User,
@@ -100,11 +101,11 @@ def _add_threat(domain="obltub.ru", category="malware") -> int:
 
 # --- загрузка статистики --------------------------------------------------
 
-def test_csv_import_keeps_only_security_categories(client):
+def test_csv_import_saves_domains(client):
+    """CSV — запасной путь: категорию фильтровать нечем, сохраняем всё."""
     data = (
         "domain;category;requests\r\n"
         "evil.ru;malware;42\r\n"
-        "news.ru;news;900\r\n"
     ).encode("utf-8")
     response = client.post(
         "/skydns/sync",
@@ -113,8 +114,89 @@ def test_csv_import_keeps_only_security_categories(client):
         follow_redirects=True,
     )
     assert response.status_code == 200
+    threat = ThreatDomain.query.filter_by(domain="evil.ru").one()
+    assert threat.requests_count == 42
+    assert threat.category_title == "malware"
+
+
+def test_api_sync_keeps_only_tracked_categories(client, monkeypatch):
+    """Домен вне отслеживаемых категорий в разбор не попадает."""
+    from app.services.skydns_client import Category, DomainStat
+
+    class FakeSkydns:
+        def __init__(self, config):
+            pass
+
+        def categories(self, start, end, lang="ru"):
+            return [Category(3, "Malware", True),
+                    Category(49, "Computers & Internet", False)]
+
+        def domains(self, start, end, cats=None, limit=None, order_by="-visits"):
+            FakeSkydns.asked_cats = cats
+            return [
+                DomainStat("evil.ru", requests=42, blocks=40, cat_ids=[3]),
+                DomainStat("news.ru", requests=900, blocks=0, cat_ids=[49]),
+            ]
+
+        def devices(self, start, end, domains=None, limit=None):
+            return []
+
+    monkeypatch.setattr(skydns_routes, "SkydnsClient", FakeSkydns)
+    response = client.post("/skydns/sync", data={
+        "start": "2026-08-01", "end": "2026-08-07", "submit_sync": "1",
+    }, follow_redirects=True)
+    assert response.status_code == 200
+
+    # В запрос ушёл фильтр по опасным категориям из ответа API.
+    assert FakeSkydns.asked_cats == [3]
     domains = {t.domain for t in ThreatDomain.query.all()}
-    assert domains == {"evil.ru"}, "новостной домен не должен попадать в разбор"
+    assert domains == {"evil.ru"}, "обычная категория не должна попадать в разбор"
+
+    threat = ThreatDomain.query.filter_by(domain="evil.ru").one()
+    assert threat.category_title == "Malware"
+    assert threat.cat_ids == "3"
+    # Справочник категорий сохранён целиком, включая неопасные.
+    assert SkydnsCategory.query.count() == 2
+
+
+def test_api_sync_saves_devices_as_hosts(client, monkeypatch):
+    """Устройства с агентом SkyDNS становятся хостами без обращения к SIEM."""
+    from app.services.skydns_client import Category, DeviceStat, DomainStat
+
+    class FakeSkydns:
+        def __init__(self, config):
+            pass
+
+        def categories(self, start, end, lang="ru"):
+            return [Category(3, "Malware", True)]
+
+        def domains(self, start, end, cats=None, limit=None, order_by="-visits"):
+            return [DomainStat("evil.ru", requests=42, cat_ids=[3])]
+
+        def devices(self, start, end, domains=None, limit=None):
+            return [
+                DeviceStat(token=12345678, ipv4=["10.0.1.5"], ipv6=["::"],
+                           requests=17),
+                # Шлюз: конечный хост неизвестен, в хосты не попадает.
+                DeviceStat(token=0, ipv4=["10.0.0.1"], ipv6=["::"], requests=5),
+            ]
+
+    monkeypatch.setattr(skydns_routes, "SkydnsClient", FakeSkydns)
+    client.post("/skydns/sync", data={
+        "start": "2026-08-01", "end": "2026-08-07", "submit_sync": "1",
+    }, follow_redirects=True)
+
+    hosts = ThreatHost.query.all()
+    assert [h.address for h in hosts] == ["10.0.1.5"]
+    assert hosts[0].source == "skydns"
+    assert hosts[0].device_token == "12345678"
+    assert hosts[0].events_count == 17
+
+
+def test_siem_hosts_are_marked_with_their_source(client):
+    threat_id = _add_threat()
+    client.post(f"/skydns/domains/{threat_id}/lookup", follow_redirects=True)
+    assert {h.source for h in ThreatHost.query.all()} == {"siem"}
 
 
 def test_manual_add_skips_category_check(client):

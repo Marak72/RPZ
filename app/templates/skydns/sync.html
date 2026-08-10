@@ -36,8 +36,8 @@
         </div>
         {{ sync_form.submit_sync(class="btn btn--primary", disabled=(not skydns_configured)) }}
         {% if not skydns_configured %}
-        <div class="help">Укажите адрес и учётные данные SkyDNS в
-          <a href="{{ url_for('main.settings') }}">настройках</a>.</div>
+        <div class="help">Укажите ID пользователя и токен API в
+          <a href="{{ url_for('skydns.settings') }}">настройках сервиса</a>.</div>
         {% endif %}
       </form>
     </div>
@@ -55,8 +55,9 @@
           <div class="error-text">{{ error }}</div>
           {% endfor %}
           <div class="help">
-            Выгрузка статистики по сайтам из личного кабинета SkyDNS. Нужны колонки
-            с доменом и категорией; кодировка и разделитель определяются автоматически.
+            Запасной путь, если токен Proxy Stat API ещё не выпущен: выгрузка по
+            сайтам из личного кабинета. Нужна колонка с доменом; кодировка и
+            разделитель определяются автоматически.
           </div>
         </div>
         {{ import_form.submit_import(class="btn btn--primary") }}
@@ -87,19 +88,28 @@
   </div>
 
   <div class="card">
-    <div class="card__header">{{ ico.icon('shield') }}<span class="card__title">Категории безопасности</span></div>
+    <div class="card__header">
+      {{ ico.icon('shield') }}<span class="card__title">Отслеживаемые категории</span>
+      <span class="badge badge--neutral" style="margin-left:auto">{{ tracked_count }}</span>
+    </div>
     <div class="card__body">
-      <p class="text-sm muted">Домен попадает в разбор, если его категория совпадает
-         с одной из этих строк (или содержит характерный признак угрозы).</p>
+      <p class="text-sm muted">
+        В разбор попадают домены только этих категорий — они уходят в параметр
+        <code>cats</code> метода <code>get_domains_activity</code>. Признак
+        «опасная» приходит от самого SkyDNS.
+      </p>
       <div class="inline">
-        {% for cat in categories %}
-        <span class="badge badge--danger">{{ cat }}</span>
+        {% for cat in categories if cat.is_tracked %}
+        <span class="badge badge--danger">{{ cat.title or cat.id }}</span>
         {% else %}
-        <span class="text-sm muted">Список пуст — берутся признаки по умолчанию.</span>
+        <span class="text-sm muted">
+          Справочник ещё не загружен — при первой выгрузке возьмётся перечень
+          категорий угроз из инструкции SkyDNS.
+        </span>
         {% endfor %}
       </div>
       <div class="help mt-1">
-        Список правится в <a href="{{ url_for('main.settings') }}">настройках</a>.
+        Выбор правится в <a href="{{ url_for('skydns.categories') }}">справочнике категорий</a>.
       </div>
     </div>
   </div>

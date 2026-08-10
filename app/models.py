@@ -45,6 +45,10 @@ THREAT_SOURCE_MANUAL = "manual"
 JOB_SUCCESS = "success"
 JOB_FAILED = "failed"
 
+# Откуда узнали про конечный хост.
+HOST_SOURCE_SIEM = "siem"      # группировка событий MaxPatrol SIEM
+HOST_SOURCE_SKYDNS = "skydns"  # метод get_devices_activity SkyDNS
+
 
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -348,9 +352,11 @@ class ThreatDomain(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     domain = db.Column(db.String(500), unique=True, nullable=False, index=True)
-    # Категория SkyDNS (как её вернул API) и её человекочитаемое название.
+    # Основная (первая опасная) категория SkyDNS и читаемые названия всех.
     category = db.Column(db.String(120), nullable=False, default="", index=True)
     category_title = db.Column(db.String(200), nullable=False, default="")
+    # Все категории домена из ответа API — список id через запятую.
+    cat_ids = db.Column(db.String(200), nullable=False, default="")
     # Профиль/подразделение SkyDNS, в статистике которого встретился домен.
     profile = db.Column(db.String(200), nullable=False, default="")
 
@@ -396,11 +402,43 @@ class ThreatDomain(db.Model):
         return f"<ThreatDomain {self.domain} ({self.category})>"
 
 
+class SkydnsCategory(db.Model):
+    """Справочник категорий SkyDNS.
+
+    Заполняется из ``get_categories_activity``: у каждой категории есть флаг
+    ``is_dangerous``, поэтому список «опасных» не нужно вести руками.
+    """
+
+    __tablename__ = "skydns_categories"
+
+    id = db.Column(db.Integer, primary_key=True)  # id категории в SkyDNS
+    title = db.Column(db.String(200), nullable=False, default="")
+    is_dangerous = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    # Ручное переопределение: категорию можно принудительно включить в разбор
+    # или исключить из него, не дожидаясь изменений на стороне SkyDNS.
+    track_override = db.Column(db.Boolean)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+
+    @property
+    def is_tracked(self) -> bool:
+        """Следим ли за категорией: ручная настройка важнее флага SkyDNS."""
+        if self.track_override is not None:
+            return self.track_override
+        return self.is_dangerous
+
+    def __repr__(self) -> str:
+        return f"<SkydnsCategory {self.id} {self.title}>"
+
+
 class ThreatHost(db.Model):
     """Конечный хост организации, обращавшийся к вредоносному домену.
 
-    Заполняется из ответа MaxPatrol SIEM: группировка событий по полю
-    ``dst.host`` даёт список адресов, а счётчик — количество событий.
+    Источников два:
+
+      * ``siem``   — группировка событий MaxPatrol SIEM по ``dst.host``;
+      * ``skydns`` — метод ``get_devices_activity``: устройства с агентом
+        SkyDNS видны сразу, без обращения к SIEM.
     """
 
     __tablename__ = "threat_hosts"
@@ -416,6 +454,10 @@ class ThreatHost(db.Model):
     address = db.Column(db.String(255), nullable=False, index=True)
     hostname = db.Column(db.String(255), nullable=False, default="")
     events_count = db.Column(db.Integer, nullable=False, default=0)
+    # Откуда узнали про хост: siem / skydns.
+    source = db.Column(db.String(20), nullable=False, default="siem", index=True)
+    # Токен устройства SkyDNS (0 — трафик через шлюз, агента нет).
+    device_token = db.Column(db.String(40), nullable=False, default="")
     first_seen = db.Column(db.DateTime)
     last_seen = db.Column(db.DateTime)
     found_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)

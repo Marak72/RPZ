@@ -17,6 +17,10 @@
     {{ ico.icon('server') }} Конечные хосты
     <span class="nav-link__count">{{ skydns_counts.hosts }}</span>
   </a>
+  <a class="nav-link {% if ep == 'skydns.categories' %}is-active{% endif %}"
+     href="{{ url_for('skydns.categories') }}">
+    {{ ico.icon('hash') }} Категории
+  </a>
   <a class="nav-link {% if ep == 'skydns.logs' %}is-active{% endif %}" href="{{ url_for('skydns.logs') }}">
     {{ ico.icon('list') }} Журнал запросов
   </a>
@@ -28,8 +32,9 @@
   <a class="nav-link {% if ep == 'skydns.sync' %}is-active{% endif %}" href="{{ url_for('skydns.sync') }}">
     {{ ico.icon('download') }} Загрузить статистику
   </a>
-  <a class="nav-link {% if ep == 'main.settings' %}is-active{% endif %}" href="{{ url_for('main.settings') }}">
-    {{ ico.icon('settings') }} Настройки
+  <a class="nav-link {% if ep == 'skydns.settings' %}is-active{% endif %}"
+     href="{{ url_for('skydns.settings') }}">
+    {{ ico.icon('settings') }} Настройки сервиса
   </a>
   {% endif %}
   <a class="nav-link" href="{{ url_for('main.push_view') }}">
