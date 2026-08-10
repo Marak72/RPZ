@@ -111,6 +111,14 @@ class SkydnsSettingsForm(FlaskForm):
         "Максимум доменов в отчёте",
         validators=[Optional(), NumberRange(min=10, max=100000)],
     )
+    detail_limit = IntegerField(
+        "Максимум строк детализации",
+        validators=[Optional(), NumberRange(min=100, max=200000)],
+    )
+    report_timeout = IntegerField(
+        "Ждать готовности отчёта, секунд",
+        validators=[Optional(), NumberRange(min=30, max=3600)],
+    )
     auto_devices = BooleanField(
         "Сразу запрашивать устройства по новым доменам", default=True
     )

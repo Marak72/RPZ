@@ -152,8 +152,8 @@ def test_api_sync_keeps_only_tracked_categories(client, monkeypatch):
                 DomainStat("news.ru", requests=900, blocks=0, cat_ids=[49]),
             ]
 
-        def devices(self, start, end, domains=None, limit=None):
-            return []
+        def hosts_by_domain(self, start, end, cats=None, limit=None):
+            return {}
 
     monkeypatch.setattr(skydns_routes, "SkydnsClient", FakeSkydns)
     response = client.post("/skydns/sync", data={
@@ -187,13 +187,12 @@ def test_api_sync_saves_devices_as_hosts(client, monkeypatch):
         def domains(self, start, end, cats=None, limit=None, order_by="-visits"):
             return [DomainStat("evil.ru", requests=42, cat_ids=[3])]
 
-        def devices(self, start, end, domains=None, limit=None):
-            return [
-                DeviceStat(token=12345678, ipv4=["10.0.1.5"], ipv6=["::"],
-                           requests=17),
-                # Шлюз: конечный хост неизвестен, в хосты не попадает.
-                DeviceStat(token=0, ipv4=["10.0.0.1"], ipv6=["::"], requests=5),
-            ]
+        def hosts_by_domain(self, start, end, cats=None, limit=None):
+            # Записи шлюза (token = 0) сюда уже не попадают: их отсеивает
+            # сам клиент при разборе детализации.
+            return {"evil.ru": [
+                DeviceStat(token=12345678, ipv4=["10.0.1.5"], requests=17),
+            ]}
 
     monkeypatch.setattr(skydns_routes, "SkydnsClient", FakeSkydns)
     client.post("/skydns/sync", data={

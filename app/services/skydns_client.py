@@ -69,29 +69,30 @@ DANGEROUS_CATEGORY_IDS = {
 # Признак «трафик пришёл через шлюз, конечный хост неизвестен».
 GATEWAY_TOKEN = 0
 
-# Отчёт формируется асинхронно: запрос ставит задачу, и до готовности приходит
-# конверт со статусом (инструкция, раздел «Статусы»). Названия статусов в
-# инструкции к нашей подписке не приведены, поэтому разбор намеренно широкий.
+# Отчёт формируется асинхронно и отдаётся файлом. Ответ метода — конверт:
+#
+#   {"task_id": "...", "status": "exists: complete",
+#    "message": "https://stch.skydns.ru/data/<id>.json",
+#    "updated": "...", "processing_time": 3.31}
+#
+# Пока отчёт строится, статус другой, а когда готов — в message лежит ссылка
+# на JSON с самим отчётом, который нужно скачать отдельным запросом.
+# Префикс "exists:" означает, что отчёт уже был построен и взят из кэша.
 STATUS_KEYS = ("status", "state", "task_status", "job_status")
-STATUS_PENDING = {
-    "pending", "in_progress", "in-progress", "progress", "processing",
-    "running", "queued", "in_queue", "new", "created", "started", "wait",
-    "waiting", "not_ready", "notready",
-}
-STATUS_READY = {"ready", "done", "success", "successful", "finished",
-                "completed", "complete", "ok"}
-STATUS_FAILED = {"error", "failed", "failure", "canceled", "cancelled",
-                 "aborted", "timeout"}
+# Статус сравнивается по вхождению подстроки: точные значения различаются
+# между методами и версиями ("complete", "exists: complete", "error: ...").
+STATUS_READY_MARKS = ("complete", "done", "ready", "success", "finish")
+STATUS_FAILED_MARKS = ("error", "fail", "cancel", "abort", "denied")
 
-# Ключи, под которыми может лежать сам отчёт, если ответ обёрнут.
+# Ключи, под которыми может лежать сам отчёт, если он пришёл прямо в ответе.
 DATA_KEYS = ("result", "results", "data", "report", "rows", "items",
              "objects", "response", "payload")
 
-# Сколько ждать готовности отчёта. Запрос идёт синхронно в веб-запросе,
-# поэтому ожидание ограничено: лучше внятная ошибка, чем таймаут gunicorn.
-REPORT_TIMEOUT = 120
+# Сколько всего ждать готовности отчёта. Обычно он строится за секунды, но
+# инструкция допускает до часа на шаг, поэтому предел вынесен в настройки.
+REPORT_TIMEOUT = 300
 POLL_START = 2
-POLL_MAX = 8
+POLL_MAX = 10
 
 
 class SkydnsError(Exception):
@@ -122,6 +123,29 @@ def _status_of(payload) -> str:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
+    return ""
+
+
+def _status_is(status: str, marks) -> bool:
+    """Совпадает ли статус с одним из признаков.
+
+    Сравнение по вхождению: SkyDNS отдаёт «exists: complete» для отчёта из
+    кэша и «complete» для только что построенного — оба означают готовность.
+    """
+    return any(mark in status for mark in marks)
+
+
+def _report_url(payload) -> str:
+    """Ссылка на файл отчёта из конверта.
+
+    Готовый отчёт не приходит в ответе — в ``message`` лежит адрес JSON-файла.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("message", "url", "link", "file", "result_url"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip().startswith(("http://", "https://")):
+            return value.strip()
     return ""
 
 
@@ -385,24 +409,30 @@ class SkydnsClient:
         wanted = list if expect == "list" else dict
         status = _status_of(payload)
 
-        # Конверт задачи: у него есть статус, а сам отчёт лежит внутри.
         if status:
-            if status in STATUS_FAILED:
+            if _status_is(status, STATUS_FAILED_MARKS):
                 raise SkydnsError(
                     f"SkyDNS вернул ошибку на {method}: "
                     f"{_error_text(payload) or status}. "
                     f"Ответ: {_excerpt(payload)}"
                 )
-            data = _found_of_type(payload, wanted)
-            if data is not None:
-                return data
-            if status in STATUS_READY and isinstance(payload, wanted):
-                # Готово, но вложенного отчёта нет — значит отчёт и есть конверт.
-                return payload
-            # Не готово (или статус незнакомый) — вызывающий подождёт.
+            if _status_is(status, STATUS_READY_MARKS):
+                # Готовый отчёт лежит файлом по ссылке из конверта.
+                url = _report_url(payload)
+                if url:
+                    return self._check_type(method, self._fetch_report(url),
+                                            wanted, source=url)
+                data = _found_of_type(payload, wanted)
+                if data is not None:
+                    return data
+                raise SkydnsError(
+                    f"SkyDNS сообщил о готовности отчёта {method}, но не дал "
+                    f"ни ссылки, ни данных. Ответ: {_excerpt(payload)}"
+                )
+            # Отчёт ещё строится — вызывающий подождёт и спросит снова.
             return None
 
-        # Обычный ответ: либо сразу нужного вида, либо в обёртке.
+        # Ответ без статуса: данные пришли прямо в нём или в обёртке.
         data = _found_of_type(payload, wanted)
         if data is not None:
             return data
@@ -419,6 +449,46 @@ class SkydnsClient:
             f"(ожидался {'список' if wanted is list else 'объект'}). "
             f"Ответ: {_excerpt(payload)}"
         )
+
+    def _check_type(self, method: str, payload, wanted, source: str = ""):
+        """Проверить, что скачанный отчёт нужного вида."""
+        data = _found_of_type(payload, wanted)
+        if data is not None:
+            return data
+        raise SkydnsError(
+            f"Файл отчёта {method} не похож на "
+            f"{'список' if wanted is list else 'объект'}"
+            f"{f' ({source})' if source else ''}. Содержимое: {_excerpt(payload)}"
+        )
+
+    def _fetch_report(self, url: str):
+        """Скачать готовый отчёт по ссылке из конверта.
+
+        Токен сюда не отправляется: файл лежит на отдельном хосте выдачи, а
+        ссылка уже одноразовая — незачем светить токен на другом домене.
+        """
+        request = urllib.request.Request(url, headers={
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+        })
+        try:
+            with self._opener.open(request, timeout=self.config.timeout) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            raise SkydnsError(
+                f"Не удалось скачать отчёт SkyDNS ({exc.code}): {url}"
+            ) from exc
+        except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
+            raise SkydnsError(
+                f"Не удалось скачать отчёт SkyDNS: {exc}"
+            ) from exc
+
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise SkydnsError(
+                "Файл отчёта SkyDNS оказался не JSON."
+            ) from exc
 
     def _period(self, start: date | None, end: date | None,
                 period: str = "range") -> dict:
@@ -545,17 +615,69 @@ class SkydnsClient:
         start: date,
         end: date | None = None,
         domain: str = "",
-        limit: int | None = 500,
+        cats: list | None = None,
+        limit: int | None = 5000,
     ) -> list:
-        """Детализация по минутам (домен, адрес, токен, профиль)."""
+        """Детализация: домен, адрес, токен и профиль в одной строке.
+
+        Главный способ узнать, какое устройство ходило на какой домен: один
+        отчёт вместо запроса устройств по каждому домену отдельно.
+        """
         payload = self._period(start, end)
         if domain:
             payload["domain"] = domain
+        if cats:
+            payload["cats"] = list(cats)
         if limit:
             payload["limit"] = int(limit)
 
         rows = self._report(M_DETAILED, payload)
         return [row for row in rows if isinstance(row, dict)]
+
+    def hosts_by_domain(
+        self,
+        start: date,
+        end: date | None = None,
+        cats: list | None = None,
+        limit: int | None = 5000,
+    ) -> dict:
+        """Сопоставить домены и устройства, которые к ним обращались.
+
+        Возвращает ``{домен: [DeviceStat, ...]}``. Записи с ``token == 0``
+        отбрасываются: это трафик через шлюз, конечный хост по нему неизвестен
+        и ищется в SIEM.
+        """
+        found: dict = {}
+        for row in self.detailed(start, end, cats=cats, limit=limit):
+            domain = _clean_domain(row.get("domain"))
+            token = int(row.get("token") or 0)
+            if not domain or token == GATEWAY_TOKEN:
+                continue
+
+            addresses = []
+            for key in ("ipv4", "ipv6"):
+                value = row.get(key)
+                if isinstance(value, str):
+                    addresses.append(value)
+                elif isinstance(value, list):
+                    addresses.extend(str(a) for a in value if a)
+
+            by_token = found.setdefault(domain, {})
+            device = by_token.get(token)
+            if device is None:
+                device = DeviceStat(token=token, secure=bool(row.get("secure")))
+                by_token[token] = device
+            for address in addresses:
+                if address in ("::", "0.0.0.0", ""):
+                    continue
+                target = device.ipv6 if ":" in address else device.ipv4
+                if address not in target:
+                    target.append(address)
+            device.requests += int(row.get("requests") or 0)
+            device.blocks += int(row.get("blocks") or 0)
+
+        return {domain: list(by_token.values())
+                for domain, by_token in found.items()}
 
 
 def _clean_domain(value) -> str:

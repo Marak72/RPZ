@@ -22,6 +22,8 @@ KEY_SKYDNS_TZ = "skydns_timezone"                # timezone для отчёто�
 KEY_SKYDNS_DAYS = "skydns_days"                  # глубина выборки, дней
 KEY_SKYDNS_VERIFY = "skydns_verify_ssl"
 KEY_SKYDNS_LIMIT = "skydns_limit"                # лимит доменов в отчёте
+KEY_SKYDNS_DETAIL_LIMIT = "skydns_detail_limit"  # лимит строк детализации
+KEY_SKYDNS_TIMEOUT = "skydns_report_timeout"     # ожидание отчёта, секунд
 KEY_SKYDNS_AUTO_DEVICES = "skydns_auto_devices"  # искать устройства при выгрузке
 
 # --- MaxPatrol SIEM -------------------------------------------------------
@@ -140,4 +142,5 @@ def load_skydns_config():
         profile_ids=get_setting(KEY_SKYDNS_PROFILE),
         timezone=get_setting(KEY_SKYDNS_TZ, DEFAULT_SKYDNS_TZ),
         verify_ssl=get_bool(KEY_SKYDNS_VERIFY, True),
+        report_timeout=get_int(KEY_SKYDNS_TIMEOUT, 300),
     )

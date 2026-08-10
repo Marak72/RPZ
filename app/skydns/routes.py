@@ -69,8 +69,10 @@ from ..settings_store import (
     KEY_SIEM_WINDOW,
     KEY_SKYDNS_AUTO_DEVICES,
     KEY_SKYDNS_DAYS,
+    KEY_SKYDNS_DETAIL_LIMIT,
     KEY_SKYDNS_LIMIT,
     KEY_SKYDNS_PROFILE,
+    KEY_SKYDNS_TIMEOUT,
     KEY_SKYDNS_TOKEN,
     KEY_SKYDNS_TZ,
     KEY_SKYDNS_URL,
@@ -101,12 +103,13 @@ skydns_bp.before_request(service_guard("skydns"))
 
 PER_PAGE = 100
 DEFAULT_WINDOW_HOURS = 24 * 7
-DEFAULT_SYNC_DAYS = 7
+DEFAULT_SYNC_DAYS = 1
 # Сколько доменов разрешаем обработать за один пакетный запрос в SIEM:
 # каждый домен — отдельный запрос, длинная пачка упрётся в таймаут веб-сервера.
 BATCH_LIMIT = 25
-# Сколько доменов опрашиваем в SkyDNS на устройства за одну выгрузку.
-DEVICE_BATCH = 40
+# Сколько строк детализации забираем за одну выгрузку: из них строится
+# соответствие «домен → устройство».
+DEFAULT_DETAIL_LIMIT = 5000
 
 # Методы, доступные в диагностике настроек.
 PROBE_METHODS = (
@@ -776,7 +779,7 @@ def _do_api_sync(form):
     # 3. Устройства: часть конечных хостов SkyDNS знает сам, без SIEM.
     devices_found = 0
     if get_bool(KEY_SKYDNS_AUTO_DEVICES, True) and total:
-        devices_found = _collect_devices(client, start, end)
+        devices_found = _collect_devices(client, start, end, tracked)
 
     log.status = JOB_SUCCESS
     log.finished_at = datetime.utcnow()
@@ -796,26 +799,33 @@ def _do_api_sync(form):
     return redirect(url_for("skydns.domains"))
 
 
-def _collect_devices(client, start: date, end: date) -> int:
-    """Запросить устройства по свежим доменам одним обращением к SkyDNS."""
-    threats = (
-        ThreatDomain.query.order_by(ThreatDomain.last_seen.desc())
-        .limit(DEVICE_BATCH)
-        .all()
-    )
-    if not threats:
+def _collect_devices(client, start: date, end: date, tracked: list) -> int:
+    """Найти устройства по всем доменам разом.
+
+    Раньше устройства запрашивались по одному домену за раз — это отдельный
+    отчёт SkyDNS на каждый домен, и выгрузка растягивалась на минуты. Теперь
+    берётся одна детализация, в которой уже есть и домен, и адрес устройства.
+    """
+    try:
+        mapping = client.hosts_by_domain(
+            start, end, cats=tracked,
+            limit=get_int(KEY_SKYDNS_DETAIL_LIMIT, DEFAULT_DETAIL_LIMIT),
+        )
+    except SkydnsError:
+        current_app.logger.exception("Не удалось получить детализацию SkyDNS")
         return 0
 
+    if not mapping:
+        return 0
+
+    threats = (
+        ThreatDomain.query
+        .filter(ThreatDomain.domain.in_(list(mapping)))
+        .all()
+    )
     found = 0
     for threat in threats:
-        try:
-            devices = client.devices(start, end, domains=[threat.domain])
-        except SkydnsError:
-            current_app.logger.exception(
-                "Не удалось получить устройства SkyDNS для %s", threat.domain
-            )
-            continue
-        added, _gateway = _apply_devices(threat, devices)
+        added, _gateway = _apply_devices(threat, mapping.get(threat.domain, []))
         if added:
             db.session.flush()
             threat.siem_hosts_count = threat.hosts.count()
@@ -988,6 +998,8 @@ def _skydns_form() -> SkydnsSettingsForm:
         timezone=get_setting(KEY_SKYDNS_TZ, DEFAULT_SKYDNS_TZ),
         days=get_int(KEY_SKYDNS_DAYS, DEFAULT_SYNC_DAYS),
         limit=get_int(KEY_SKYDNS_LIMIT, DEFAULT_SKYDNS_LIMIT),
+        detail_limit=get_int(KEY_SKYDNS_DETAIL_LIMIT, DEFAULT_DETAIL_LIMIT),
+        report_timeout=get_int(KEY_SKYDNS_TIMEOUT, 300),
         auto_devices=get_bool(KEY_SKYDNS_AUTO_DEVICES, True),
         verify_ssl=get_bool(KEY_SKYDNS_VERIFY, True),
     )
@@ -1067,6 +1079,10 @@ def _save_skydns(form) -> None:
         set_setting(KEY_SKYDNS_DAYS, str(form.days.data))
     if form.limit.data:
         set_setting(KEY_SKYDNS_LIMIT, str(form.limit.data))
+    if form.detail_limit.data:
+        set_setting(KEY_SKYDNS_DETAIL_LIMIT, str(form.detail_limit.data))
+    if form.report_timeout.data:
+        set_setting(KEY_SKYDNS_TIMEOUT, str(form.report_timeout.data))
     if form.token.data:
         set_setting(KEY_SKYDNS_TOKEN, form.token.data.strip(), is_secret=True)
 

@@ -66,6 +66,19 @@
         </div>
       </div>
 
+      <div class="row">
+        <div class="field">
+          {{ skydns_form.detail_limit.label(class="label") }}
+          {{ skydns_form.detail_limit() }}
+          <div class="help">Из детализации строится соответствие «домен → устройство».</div>
+        </div>
+        <div class="field">
+          {{ skydns_form.report_timeout.label(class="label") }}
+          {{ skydns_form.report_timeout() }}
+          <div class="help">Отчёт строится асинхронно; обычно готов за секунды.</div>
+        </div>
+      </div>
+
       <div class="check">
         {{ skydns_form.auto_devices() }}
         <div>

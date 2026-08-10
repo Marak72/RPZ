@@ -402,3 +402,109 @@ def test_probe_returns_raw_response(monkeypatch):
     assert result["response"] == {"status": "pending"}
     assert result["url"].endswith("/proxy/v2/get_categories_activity/")
     assert result["request"]["period"] == "range"
+
+
+# --- реальный протокол: конверт задачи + файл отчёта ----------------------
+
+REAL_ENVELOPE = {
+    "task_id": "e31877f316ea25cf0c1cf0835ede0427",
+    "status": "exists: complete",
+    "message": "https://stch.skydns.ru/data/26a8536a3b42.json",
+    "updated": "2026-08-10 18:05:33",
+    "processing_time": 3.3166539999999993,
+}
+
+
+def _client_with_file(monkeypatch, envelope, report, capture=None):
+    """Клиент, у которого метод отдаёт конверт, а ссылка — файл отчёта."""
+    client = SkydnsClient(SkydnsConfig(user_id="1", token="t", report_timeout=5))
+    monkeypatch.setattr(client, "_call", lambda m, p: envelope)
+
+    def fake_fetch(url):
+        if capture is not None:
+            capture.append(url)
+        return report
+
+    monkeypatch.setattr(client, "_fetch_report", fake_fetch)
+    monkeypatch.setattr(skydns_client.time, "sleep", lambda _s: None)
+    return client
+
+
+def test_cached_report_status_is_recognised(monkeypatch):
+    """«exists: complete» — это готовый отчёт из кэша, а не «ещё не готово»."""
+    urls = []
+    client = _client_with_file(
+        monkeypatch, REAL_ENVELOPE,
+        [{"cat": {"id": 3, "title": "Malware", "is_dangerous": True}}],
+        capture=urls,
+    )
+    cats = client.categories(START, END)
+    assert [c.id for c in cats] == [3]
+    # Отчёт скачан именно по ссылке из конверта.
+    assert urls == ["https://stch.skydns.ru/data/26a8536a3b42.json"]
+
+
+def test_plain_complete_status_also_works(monkeypatch):
+    envelope = dict(REAL_ENVELOPE, status="complete")
+    client = _client_with_file(monkeypatch, envelope,
+                               [{"domain": "evil.ru", "requests": 5}])
+    assert [s.domain for s in client.domains(START, END)] == ["evil.ru"]
+
+
+def test_status_with_error_prefix_is_an_error(monkeypatch):
+    client = _client_with_file(
+        monkeypatch,
+        {"task_id": "x", "status": "error: period too large", "message": ""},
+        [],
+    )
+    with pytest.raises(SkydnsError, match="period too large"):
+        client.categories(START, END)
+
+
+def test_ready_without_link_or_data_is_reported(monkeypatch):
+    """Готово, но ни ссылки, ни данных — молча притворяться нечем."""
+    client = _client_with_file(
+        monkeypatch, {"task_id": "x", "status": "complete"}, [],
+    )
+    with pytest.raises(SkydnsError, match="ни ссылки, ни данных"):
+        client.categories(START, END)
+
+
+def test_pending_then_complete_downloads_the_file(monkeypatch):
+    """Первый ответ — «в работе», второй — готовый отчёт со ссылкой."""
+    client = SkydnsClient(SkydnsConfig(user_id="1", token="t", report_timeout=5))
+    envelopes = [
+        {"task_id": "x", "status": "new"},
+        {"task_id": "x", "status": "in progress"},
+        REAL_ENVELOPE,
+    ]
+    monkeypatch.setattr(
+        client, "_call",
+        lambda m, p: envelopes.pop(0) if len(envelopes) > 1 else envelopes[0],
+    )
+    monkeypatch.setattr(client, "_fetch_report",
+                        lambda url: [{"domain": "evil.ru"}])
+    monkeypatch.setattr(skydns_client.time, "sleep", lambda _s: None)
+
+    assert [s.domain for s in client.domains(START, END)] == ["evil.ru"]
+
+
+def test_report_file_may_be_wrapped(monkeypatch):
+    """Файл отчёта тоже может быть обёрнут — достаём список изнутри."""
+    client = _client_with_file(monkeypatch, REAL_ENVELOPE,
+                               {"result": [{"domain": "evil.ru"}]})
+    assert [s.domain for s in client.domains(START, END)] == ["evil.ru"]
+
+
+def test_wrong_report_file_shape_names_the_source(monkeypatch):
+    client = _client_with_file(monkeypatch, REAL_ENVELOPE, {"oops": 1})
+    with pytest.raises(SkydnsError) as exc:
+        client.domains(START, END)
+    assert "stch.skydns.ru" in str(exc.value)
+
+
+def test_total_activity_reads_object_from_the_file(monkeypatch):
+    client = _client_with_file(monkeypatch, REAL_ENVELOPE,
+                               {"requests": 39352, "blocks": 0,
+                                "dangerous_requests": 39352})
+    assert client.total_activity(START, END)["requests"] == 39352
