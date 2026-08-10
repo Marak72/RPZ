@@ -5,16 +5,20 @@
 """
 from __future__ import annotations
 
+from datetime import date
+
 from flask import Blueprint, render_template
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 from ..extensions import db
 from ..models import (
     STATUS_NEW,
+    TASK_DONE,
     THREAT_NEW,
     BlockEntry,
     Document,
     RpzSnapshot,
+    Task,
     ThreatDomain,
     ThreatHost,
 )
@@ -49,8 +53,19 @@ def index():
                 ThreatDomain.siem_checked_at.is_(None)
             ).count(),
         }
+        open_tasks = Task.query.filter(Task.status != TASK_DONE)
+        tasks = {
+            "open": open_tasks.count(),
+            "mine": open_tasks.filter(
+                Task.assignee_id == current_user.id
+            ).count(),
+            "overdue": open_tasks.filter(
+                Task.due_date.isnot(None), Task.due_date < date.today()
+            ).count(),
+        }
     except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
         fstec = {"blocked": 0, "pending": 0, "documents": 0, "updated": None}
         skydns = {"threats": 0, "new": 0, "hosts": 0, "unchecked": 0}
+        tasks = {"open": 0, "mine": 0, "overdue": 0}
 
-    return render_template("hub.html", fstec=fstec, skydns=skydns)
+    return render_template("hub.html", fstec=fstec, skydns=skydns, tasks=tasks)

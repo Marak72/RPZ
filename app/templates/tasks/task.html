@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ task.key }}{% endblock %}
+{% block subheading %}<div class="topbar__sub">{{ task.title }}</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ task.key }} · {{ task.title }}</h2>
+    <p>
+      {{ task.status_title }} · {{ task.priority_title }} приоритет
+      {%- if task.assignee %} · {{ task.assignee.display_name }}
+      {%- else %} · <span class="muted">не назначен</span>{% endif %}
+      {%- if task.due_date %} · срок {{ task.due_date.strftime('%d.%m.%Y') }}
+        {%- if task.is_overdue %} <span class="badge badge--danger">просрочена</span>{% endif %}
+      {%- endif %}
+    </p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('tasks.board') }}">← К доске</a>
+    {% if current_user.is_operator %}
+    <a class="btn" href="{{ url_for('tasks.task_edit', task_id=task.id) }}">
+      {{ ico.icon('settings') }} Изменить</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if current_user.is_operator %}
+<div class="card" style="margin-bottom:1rem">
+  <div class="card__body">
+    <div class="btn-group">
+      <span class="text-sm muted">Перенести в:</span>
+      {% for code, title in statuses %}
+      <form method="post" action="{{ url_for('tasks.task_move', task_id=task.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="status" value="{{ code }}">
+        <button class="btn btn--sm {% if task.status == code %}btn--primary{% endif %}"
+                {% if task.status == code %}disabled{% endif %}>{{ title }}</button>
+      </form>
+      {% endfor %}
+
+      <div class="toolbar__spacer"></div>
+      {% if task.assignee_id != current_user.id %}
+      <form method="post" action="{{ url_for('tasks.task_assign', task_id=task.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="assignee_id" value="{{ current_user.id }}">
+        <button class="btn btn--sm">{{ ico.icon('check') }} Взять себе</button>
+      </form>
+      {% else %}
+      <form method="post" action="{{ url_for('tasks.task_assign', task_id=task.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="assignee_id" value="">
+        <button class="btn btn--sm">Снять с себя</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">{{ ico.icon('file') }}<span class="card__title">Описание</span></div>
+    <div class="card__body">
+      {% if task.description %}
+      <div class="alert__text--pre text-sm">{{ task.description }}</div>
+      {% else %}
+      <p class="text-sm muted">Описание не заполнено.</p>
+      {% endif %}
+      <hr class="divider">
+      <dl class="kv">
+        <dt>Автор</dt><dd>{{ task.reporter.display_name if task.reporter else '—' }}</dd>
+        <dt>Создана</dt><dd>{{ task.created_at.strftime('%d.%m.%Y %H:%M') if task.created_at else '—' }}</dd>
+        <dt>Изменена</dt><dd>{{ task.updated_at.strftime('%d.%m.%Y %H:%M') if task.updated_at else '—' }}</dd>
+        <dt>Закрыта</dt><dd>{{ task.closed_at.strftime('%d.%m.%Y %H:%M') if task.closed_at else '—' }}</dd>
+        <dt>Сервис</dt><dd>{{ task.service_id or '—' }}</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('clock') }}<span class="card__title">История</span>
+      <span class="badge badge--neutral" style="margin-left:auto">{{ events|length }}</span>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if events %}
+      <table class="table">
+        <tbody>
+          {% for e in events %}
+          <tr>
+            <td>
+              <div class="text-sm">
+                {% if e.field == 'created' %}задача создана
+                {% else %}
+                  {{ field_titles.get(e.field, e.field) }}:
+                  <span class="muted">{{ e.old_value or '—' }}</span> →
+                  <strong>{{ e.new_value or '—' }}</strong>
+                {% endif %}
+              </div>
+              <div class="text-xs muted">
+                {{ e.created_at.strftime('%d.%m.%Y %H:%M') }} ·
+                {{ e.user.display_name if e.user else '—' }}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty"><div class="empty__title">Изменений не было</div></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('inbox') }}<span class="card__title">Комментарии</span>
+    <span class="badge badge--neutral" style="margin-left:auto">{{ comments|length }}</span>
+  </div>
+  <div class="card__body">
+    {% for c in comments %}
+    <div class="comment">
+      <div class="comment__head">
+        <strong>{{ c.user.display_name if c.user else '—' }}</strong>
+        <span class="text-xs muted">{{ c.created_at.strftime('%d.%m.%Y %H:%M') }}</span>
+      </div>
+      <div class="comment__body alert__text--pre">{{ c.body }}</div>
+    </div>
+    {% else %}
+    <p class="text-sm muted">Комментариев пока нет.</p>
+    {% endfor %}
+
+    {% if current_user.is_operator %}
+    <form method="post" class="mt-2">
+      {{ comment_form.hidden_tag() }}
+      <div class="field">
+        {{ comment_form.body.label(class="label") }}
+        {{ comment_form.body(rows=3, placeholder="Что сделано, что мешает, что дальше…") }}
+        {% for e in comment_form.body.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+      </div>
+      {{ comment_form.submit_comment(class="btn btn--primary") }}
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if current_user.is_operator %}
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('alert') }}<span class="card__title">Удаление</span></div>
+  <div class="card__body">
+    <p class="text-sm muted">Задача, комментарии и история будут удалены безвозвратно.
+       Обычно достаточно перенести её в «Готово».</p>
+    <form method="post" action="{{ url_for('tasks.task_delete', task_id=task.id) }}"
+          data-confirm="1" data-confirm-title="Удалить задачу?" data-confirm-ok="Удалить"
+          data-confirm-body="Задача <strong>{{ task.key }}</strong>, её комментарии и история будут удалены.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--danger btn--sm">{{ ico.icon('x') }} Удалить задачу</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -56,6 +56,31 @@ JOB_FAILED = "failed"
 HOST_SOURCE_SIEM = "siem"      # группировка событий MaxPatrol SIEM
 HOST_SOURCE_SKYDNS = "skydns"  # метод get_devices_activity SkyDNS
 
+# Задачи отдела. Порядок статусов — это порядок колонок на доске.
+TASK_BACKLOG = "backlog"
+TASK_TODO = "todo"
+TASK_PROGRESS = "in_progress"
+TASK_REVIEW = "review"
+TASK_DONE = "done"
+
+TASK_STATUSES = (
+    (TASK_BACKLOG, "Бэклог"),
+    (TASK_TODO, "К работе"),
+    (TASK_PROGRESS, "В работе"),
+    (TASK_REVIEW, "На проверке"),
+    (TASK_DONE, "Готово"),
+)
+TASK_OPEN_STATUSES = (TASK_BACKLOG, TASK_TODO, TASK_PROGRESS, TASK_REVIEW)
+
+TASK_PRIORITIES = (
+    ("critical", "Критический"),
+    ("high", "Высокий"),
+    ("normal", "Обычный"),
+    ("low", "Низкий"),
+)
+# Порядок сортировки: критические задачи наверху доски.
+TASK_PRIORITY_ORDER = {"critical": 0, "high": 1, "normal": 2, "low": 3}
+
 
 @login_manager.user_loader
 def load_user(user_id: str):
@@ -594,6 +619,116 @@ class SkydnsSyncLog(db.Model):
 
     def __repr__(self) -> str:
         return f"<SkydnsSyncLog {self.started_at} {self.status}>"
+
+
+class Task(db.Model):
+    """Задача отдела.
+
+    Номер (``SOC-12``) выдаётся при создании и не меняется: на него ссылаются
+    в переписке и в отчётах.
+    """
+
+    __tablename__ = "tasks"
+
+    id = db.Column(db.Integer, primary_key=True)
+    number = db.Column(db.Integer, unique=True, nullable=False, index=True)
+    title = db.Column(db.String(300), nullable=False)
+    description = db.Column(db.Text, default="")
+
+    status = db.Column(db.String(20), nullable=False, default=TASK_BACKLOG,
+                       index=True)
+    priority = db.Column(db.String(20), nullable=False, default="normal",
+                         index=True)
+    # К какому сервису портала относится задача (fstec / skydns / пусто).
+    service_id = db.Column(db.String(40), nullable=False, default="", index=True)
+
+    assignee_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    reporter_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    due_date = db.Column(db.Date)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+    closed_at = db.Column(db.DateTime)
+
+    assignee = db.relationship("User", foreign_keys=[assignee_id])
+    reporter = db.relationship("User", foreign_keys=[reporter_id])
+    comments = db.relationship(
+        "TaskComment", backref="task", cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+    events = db.relationship(
+        "TaskEvent", backref="task", cascade="all, delete-orphan",
+        lazy="dynamic",
+    )
+
+    @property
+    def key(self) -> str:
+        return f"SOC-{self.number}"
+
+    @property
+    def status_title(self) -> str:
+        return dict(TASK_STATUSES).get(self.status, self.status)
+
+    @property
+    def priority_title(self) -> str:
+        return dict(TASK_PRIORITIES).get(self.priority, self.priority)
+
+    @property
+    def is_open(self) -> bool:
+        return self.status != TASK_DONE
+
+    @property
+    def is_overdue(self) -> bool:
+        """Просрочена ли задача. Закрытые не считаются просроченными."""
+        if not self.due_date or not self.is_open:
+            return False
+        return self.due_date < datetime.utcnow().date()
+
+    def __repr__(self) -> str:
+        return f"<Task {self.key} {self.status}>"
+
+
+class TaskComment(db.Model):
+    """Комментарий к задаче."""
+
+    __tablename__ = "task_comments"
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id"), nullable=False,
+                        index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    body = db.Column(db.Text, nullable=False, default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    user = db.relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<TaskComment {self.task_id}>"
+
+
+class TaskEvent(db.Model):
+    """Запись в истории задачи: кто и что поменял.
+
+    Без истории непонятно, почему задача переехала в другую колонку и когда
+    сменился исполнитель.
+    """
+
+    __tablename__ = "task_events"
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id"), nullable=False,
+                        index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    field = db.Column(db.String(40), nullable=False, default="")
+    old_value = db.Column(db.String(300), default="")
+    new_value = db.Column(db.String(300), default="")
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+
+    user = db.relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<TaskEvent {self.task_id} {self.field}>"
 
 
 class IocHash(db.Model):

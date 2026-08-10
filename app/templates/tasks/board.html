@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Доска{% endblock %}
+{% block subheading %}<div class="topbar__sub">Задачи отдела</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Доска задач</h2>
+    <p>Задач в выборке: {{ total }}. Карточки внутри колонки отсортированы
+       по приоритету, затем по сроку.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('tasks.task_list', **request.args) }}">
+      {{ ico.icon('list') }} Списком</a>
+    {% if current_user.is_operator %}
+    <a class="btn btn--primary" href="{{ url_for('tasks.task_new') }}">
+      {{ ico.icon('play') }} Новая задача</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:1rem">
+  {% with target = 'tasks.board' %}{% include "tasks/_filters.html" %}{% endwith %}
+</div>
+
+<div class="board">
+  {% for col in columns %}
+  <div class="board__col">
+    <div class="board__head">
+      <span>{{ col.title }}</span>
+      <span class="badge badge--neutral">{{ col.cards|length }}</span>
+    </div>
+    <div class="board__body">
+      {% for t in col.cards %}
+      {% include "tasks/_card.html" %}
+      {% else %}
+      <div class="board__empty">пусто</div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

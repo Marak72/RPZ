@@ -10,6 +10,7 @@ from .extensions import db
 from .models import AppSetting
 
 KEY_VT_API = "vt_api_key"
+KEY_TASK_COUNTER = "tasks_last_number"  # выданный номер задачи
 KEY_PROTECTED = "protected_domains"
 
 # --- SkyDNS (Proxy Stat API) ----------------------------------------------

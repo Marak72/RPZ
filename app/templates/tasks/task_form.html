@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ task.key if task else 'Новая задача' }}{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ 'Изменить ' + task.key if task else 'Новая задача' }}</h2>
+    <p>Номер выдаётся при создании и не меняется — на него ссылаются в переписке.</p>
+  </div>
+  <a class="btn" href="{{ url_for('tasks.task_view', task_id=task.id) if task else url_for('tasks.board') }}">
+    ← Назад</a>
+</div>
+
+<form method="post">
+  {{ form.hidden_tag() }}
+  <div class="card">
+    <div class="card__body">
+      <div class="field">
+        {{ form.title.label(class="label") }}
+        {{ form.title(placeholder="Заблокировать домены из письма 240/7") }}
+        {% for e in form.title.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+      </div>
+      <div class="field">
+        {{ form.description.label(class="label") }}
+        {{ form.description(rows=6, placeholder="Что нужно сделать и как понять, что готово.") }}
+      </div>
+      <div class="row">
+        <div class="field">
+          {{ form.status.label(class="label") }}
+          {{ form.status() }}
+        </div>
+        <div class="field">
+          {{ form.priority.label(class="label") }}
+          {{ form.priority() }}
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          {{ form.assignee_id.label(class="label") }}
+          {{ form.assignee_id() }}
+        </div>
+        <div class="field">
+          {{ form.service_id.label(class="label") }}
+          {{ form.service_id() }}
+          <div class="help">К какому сервису портала относится задача.</div>
+        </div>
+        <div class="field">
+          {{ form.due_date.label(class="label") }}
+          {{ form.due_date() }}
+        </div>
+      </div>
+    </div>
+    <div class="card__footer">
+      {{ form.submit(class="btn btn--primary") }}
+    </div>
+  </div>
+</form>
+{% endblock %}

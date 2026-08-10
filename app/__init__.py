@@ -36,12 +36,14 @@ def create_app(config_class: type = Config) -> Flask:
     from .hub.routes import hub_bp
     from .main.routes import main_bp
     from .skydns.routes import skydns_bp
+    from .tasks.routes import tasks_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(hub_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(skydns_bp)
+    app.register_blueprint(tasks_bp)
 
     _register_portal_context(app)
     _register_error_handlers(app)

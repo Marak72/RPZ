@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Задачи{% endblock %}
+{% block subheading %}<div class="topbar__sub">Списком</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Задачи отдела</h2>
+    <p>По умолчанию готовые задачи скрыты — включите вкладку «Готово», чтобы их увидеть.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('tasks.tasks_csv', **request.args) }}">
+      {{ ico.icon('download') }} Экспорт CSV</a>
+    <a class="btn" href="{{ url_for('tasks.board', **request.args) }}">
+      {{ ico.icon('grid') }} На доску</a>
+    {% if current_user.is_operator %}
+    <a class="btn btn--primary" href="{{ url_for('tasks.task_new') }}">
+      {{ ico.icon('play') }} Новая задача</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="tabs">
+  <a class="tab {% if not status %}is-active{% endif %}"
+     href="{{ url_for('tasks.task_list') }}">Открытые</a>
+  {% for code, title in statuses %}
+  <a class="tab {% if status == code %}is-active{% endif %}"
+     href="{{ url_for('tasks.task_list', status=code) }}">{{ title }}</a>
+  {% endfor %}
+</div>
+
+<div class="card">
+  {% with target = 'tasks.task_list' %}{% include "tasks/_filters.html" %}{% endwith %}
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Задача</th><th>Статус</th><th>Приоритет</th>
+          <th>Исполнитель</th><th>Сервис</th><th>Срок</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in items %}
+        <tr>
+          <td>
+            <a href="{{ url_for('tasks.task_view', task_id=t.id) }}">
+              <strong>{{ t.key }}</strong> {{ t.title }}</a>
+          </td>
+          <td class="text-xs">{{ t.status_title }}</td>
+          <td>
+            {% if t.priority == 'critical' %}<span class="badge badge--danger">критич.</span>
+            {% elif t.priority == 'high' %}<span class="badge badge--warning">высокий</span>
+            {% elif t.priority == 'low' %}<span class="badge badge--neutral">низкий</span>
+            {% else %}<span class="text-xs muted">обычный</span>{% endif %}
+          </td>
+          <td class="text-xs">{{ t.assignee.display_name if t.assignee else '—' }}</td>
+          <td class="text-xs">{{ t.service_id or '—' }}</td>
+          <td class="text-xs nowrap">
+            {% if t.due_date %}
+              {% if t.is_overdue %}<span class="badge badge--danger">{{ t.due_date.strftime('%d.%m.%Y') }}</span>
+              {% else %}{{ t.due_date.strftime('%d.%m.%Y') }}{% endif %}
+            {% else %}—{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="6">
+            <div class="empty">
+              {{ ico.icon('list') }}
+              <div class="empty__title">Задач не найдено</div>
+              {% if current_user.is_operator %}
+              <a class="btn btn--primary btn--sm" href="{{ url_for('tasks.task_new') }}">
+                {{ ico.icon('play') }} Создать задачу</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,39 @@
+{# Боковая навигация сервиса «Задачи отдела». #}
+<div class="nav-group">
+  <a class="nav-link {% if ep == 'tasks.board' %}is-active{% endif %}" href="{{ url_for('tasks.board') }}">
+    {{ ico.icon('grid') }} Доска
+    <span class="nav-link__count">{{ task_counts.open }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'tasks.task_list' %}is-active{% endif %}" href="{{ url_for('tasks.task_list') }}">
+    {{ ico.icon('list') }} Списком
+  </a>
+</div>
+
+<div class="nav-group">
+  <div class="nav-group__title">Фильтры</div>
+  <a class="nav-link" href="{{ url_for('tasks.board', mine='1') }}">
+    {{ ico.icon('check-circle') }} Мои задачи
+    <span class="nav-link__count">{{ task_counts.mine }}</span>
+  </a>
+  <a class="nav-link" href="{{ url_for('tasks.board', overdue='1') }}">
+    {{ ico.icon('clock') }} Просроченные
+    {% if task_counts.overdue %}
+    <span class="nav-link__count nav-link__count--alert">{{ task_counts.overdue }}</span>
+    {% endif %}
+  </a>
+  <a class="nav-link" href="{{ url_for('tasks.board', assignee='none') }}">
+    {{ ico.icon('alert') }} Без исполнителя
+  </a>
+</div>
+
+{% if current_user.is_operator %}
+<div class="nav-group">
+  <div class="nav-group__title">Действия</div>
+  <a class="nav-link {% if ep == 'tasks.task_new' %}is-active{% endif %}" href="{{ url_for('tasks.task_new') }}">
+    {{ ico.icon('play') }} Новая задача
+  </a>
+  <a class="nav-link" href="{{ url_for('tasks.tasks_csv') }}">
+    {{ ico.icon('download') }} Экспорт CSV
+  </a>
+</div>
+{% endif %}

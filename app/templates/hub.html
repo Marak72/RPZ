@@ -81,6 +81,56 @@
   </div>
   {% endif %}
 
+  {% if 'tasks' in allowed %}
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('list') }}
+      <span class="card__title">Задачи отдела</span>
+      <span class="badge badge--neutral" style="margin-left:auto">/tasks/</span>
+    </div>
+    <div class="card__body">
+      <p class="text-sm muted">
+        Доска задач отдела: кто чем занят, что просрочено, что ждёт проверки.
+        Задачу можно привязать к сервису, обсудить в комментариях и посмотреть
+        историю изменений.
+      </p>
+
+      <div class="grid grid--stats mt-2">
+        <a class="stat stat--primary" href="{{ url_for('tasks.board') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('list') }}</span>
+            <span class="stat__label">В работе</span>
+          </div>
+          <div class="stat__value">{{ tasks.open }}</div>
+          <div class="stat__hint">открытых задач</div>
+        </a>
+        <a class="stat stat--info" href="{{ url_for('tasks.board', mine='1') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('check-circle') }}</span>
+            <span class="stat__label">Мои</span>
+          </div>
+          <div class="stat__value">{{ tasks.mine }}</div>
+          <div class="stat__hint">назначены на меня</div>
+        </a>
+        <a class="stat {{ 'stat--danger' if tasks.overdue else 'stat--success' }}"
+           href="{{ url_for('tasks.board', overdue='1') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('clock') }}</span>
+            <span class="stat__label">Просрочено</span>
+          </div>
+          <div class="stat__value">{{ tasks.overdue }}</div>
+          <div class="stat__hint">срок прошёл</div>
+        </a>
+      </div>
+    </div>
+    <div class="card__footer">
+      <a class="btn btn--primary" href="{{ url_for('tasks.board') }}">
+        {{ ico.icon('grid') }} Открыть сервис
+      </a>
+    </div>
+  </div>
+  {% endif %}
+
   {% if 'skydns' in allowed %}
   <div class="card">
     <div class="card__header">

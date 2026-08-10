@@ -5,7 +5,8 @@
 
   * ``fstec``  (``/fstec/``)  — блокировка доменов из писем ФСТЭК через RPZ BIND;
   * ``skydns`` (``/skydns/``) — угрозы из статистики SkyDNS и поиск конечных
-    хостов в MaxPatrol SIEM.
+    хостов в MaxPatrol SIEM;
+  * ``tasks``  (``/tasks/``)  — задачи отдела: доска, карточки, комментарии.
 
 В корне портала (``/``) — главная страница со списком сервисов, blueprint
 ``hub``. Снаружи всё это отдаётся на подпути ``/soc/``, то есть сервисы
@@ -40,6 +41,15 @@ SERVICES: tuple[Service, ...] = (
         endpoint="main.dashboard",
         blueprint="main",
         nav_template="nav/_fstec.html",
+    ),
+    Service(
+        id="tasks",
+        title="Задачи отдела",
+        subtitle="кто что делает",
+        icon="list",
+        endpoint="tasks.board",
+        blueprint="tasks",
+        nav_template="nav/_tasks.html",
     ),
     Service(
         id="skydns",
