@@ -64,7 +64,7 @@ TASK_REVIEW = "review"
 TASK_DONE = "done"
 
 TASK_STATUSES = (
-    (TASK_BACKLOG, "Бэклог"),
+    (TASK_BACKLOG, "Входящие"),
     (TASK_TODO, "К работе"),
     (TASK_PROGRESS, "В работе"),
     (TASK_REVIEW, "На проверке"),

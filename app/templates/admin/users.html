@@ -44,7 +44,7 @@
             {% if u.is_admin %}
               <span class="badge badge--neutral">все</span>
             {% else %}
-              {% for svc in services if u.can_use(svc.id) %}
+              {% for svc in portal_services if u.can_use(svc.id) %}
               <span class="badge badge--info">{{ svc.title }}</span>
               {% else %}
               <span class="muted">нет доступа</span>

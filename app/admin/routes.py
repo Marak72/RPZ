@@ -65,7 +65,9 @@ def users():
     return render_template(
         "admin/users.html",
         items=User.query.order_by(User.is_enabled.desc(), User.username).all(),
-        services=SERVICES,
+        # Не "services": так называется список сервисов портала в общей
+        # вёрстке, и переменная шаблона перекрыла бы переключатель.
+        portal_services=SERVICES,
         roles=dict(ROLES),
     )
 
@@ -221,7 +223,7 @@ def profile():
             return render_template("admin/profile.html",
                                    profile_form=profile_form,
                                    password_form=password_form,
-                                   services=SERVICES)
+                                   portal_services=SERVICES)
         current_user.set_password(password_form.password.data)
         db.session.commit()
         flash("Пароль изменён.", "success")
@@ -231,7 +233,7 @@ def profile():
         "admin/profile.html",
         profile_form=profile_form,
         password_form=password_form,
-        services=SERVICES,
+        portal_services=SERVICES,
     )
 
 

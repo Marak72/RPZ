@@ -15,7 +15,7 @@
   <div class="card__header">{{ ico.icon('grid') }}<span class="card__title">Доступные сервисы</span></div>
   <div class="card__body">
     <div class="inline">
-      {% for svc in services if current_user.can_use(svc.id) %}
+      {% for svc in portal_services if current_user.can_use(svc.id) %}
       <a class="badge badge--info" href="{{ url_for(svc.endpoint) }}">{{ svc.title }}</a>
       {% else %}
       <span class="text-sm muted">Сервисы не выданы — обратитесь к администратору.</span>

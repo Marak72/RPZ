@@ -1,6 +1,7 @@
 {# Карточка задачи на доске. Ожидает переменную `t`. #}
 <div class="tcard {% if t.is_overdue %}tcard--overdue{% endif %} tcard--{{ t.priority }}"
-     {% if current_user.is_operator %}draggable="true" data-task="{{ t.id }}"{% endif %}>
+     {% if current_user.is_operator %}draggable="true" data-task="{{ t.id }}"
+     data-move-url="{{ url_for('tasks.task_move', task_id=t.id) }}"{% endif %}>
   <a class="tcard__link" href="{{ url_for('tasks.task_view', task_id=t.id) }}">
     <div class="tcard__top">
       <span class="tcard__key">{{ t.key }}</span>

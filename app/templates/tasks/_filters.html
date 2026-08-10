@@ -16,7 +16,7 @@
     </select>
     <select name="service" class="input--auto">
       <option value="">Все сервисы</option>
-      {% for svc in services %}
+      {% for svc in filter_services %}
       <option value="{{ svc.id }}" {% if filters.service == svc.id %}selected{% endif %}>
         {{ svc.title }}</option>
       {% endfor %}

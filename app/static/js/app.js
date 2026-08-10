@@ -316,7 +316,10 @@
 
     var column = zone.closest("[data-status]");
     var form = document.getElementById("moveForm");
-    if (!column || !form || !window.TASK_MOVE_URL) return;
+    // Адрес переноса берём с карточки: собирать его из шаблона строкой —
+    // верный способ промахнуться мимо маршрута.
+    var moveUrl = dragged.dataset.moveUrl;
+    if (!column || !form || !moveUrl) return;
 
     // Карточку переносим сразу: ждать перезагрузку страницы неприятно.
     var note = zone.querySelector("[data-empty-note]");
@@ -324,7 +327,7 @@
     zone.appendChild(dragged);
     refreshColumnCounts();
 
-    form.action = window.TASK_MOVE_URL.replace(/0$/, dragged.dataset.task);
+    form.action = moveUrl;
     form.querySelector("[data-move-status]").value = column.dataset.status;
     form.submit();
   });

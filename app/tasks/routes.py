@@ -166,7 +166,10 @@ def board():
         columns=columns,
         statuses=TASK_STATUSES,
         people=_people(),
-        services=[s for s in SERVICES if s.id != "tasks"],
+        # Не "services": так называется список сервисов портала в общей
+        # вёрстке, и переменная шаблона его перекрыла бы — из переключателя
+        # пропала бы вкладка самого сервиса задач.
+        filter_services=[s for s in SERVICES if s.id != "tasks"],
         filters=_current_filters(),
         total=len(tasks),
     )
@@ -234,7 +237,10 @@ def task_list():
         statuses=TASK_STATUSES,
         priorities=TASK_PRIORITIES,
         people=_people(),
-        services=[s for s in SERVICES if s.id != "tasks"],
+        # Не "services": так называется список сервисов портала в общей
+        # вёрстке, и переменная шаблона его перекрыла бы — из переключателя
+        # пропала бы вкладка самого сервиса задач.
+        filter_services=[s for s in SERVICES if s.id != "tasks"],
         filters=_current_filters(),
         status=status,
     )

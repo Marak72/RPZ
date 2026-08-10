@@ -102,6 +102,14 @@ def test_profile_is_open_to_everyone(app):
     assert _login(app, "dns").get("/admin/profile").status_code == 200
 
 
+def test_profile_switcher_hides_services_without_access(app):
+    """Переключатель на профиле показывает то же, что и везде."""
+    _add_user("dns", services=["fstec"])
+    body = _login(app, "dns").get("/admin/profile").get_data(as_text=True)
+    assert "РПЗ ФСТЭК" in body
+    assert "Угрозы SkyDNS" not in body
+
+
 # --- вход -----------------------------------------------------------------
 
 def test_disabled_account_cannot_log_in(app):

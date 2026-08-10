@@ -493,3 +493,43 @@ def test_viewer_cannot_use_quick_add_or_checklist(app):
     assert viewer.post("/tasks/quick", data={"title": "нельзя"}).status_code == 403
     assert viewer.get("/tasks/my").status_code == 200
     assert viewer.get("/tasks/workload").status_code == 200
+
+
+# --- каркас страниц -------------------------------------------------------
+
+def test_switcher_keeps_every_service_on_task_pages(client):
+    """Страницы задач не должны выбивать свою же вкладку из переключателя.
+
+    Список сервисов приходит из общей вёрстки; одноимённая переменная
+    шаблона его перекрывала, и вкладка «Задачи отдела» пропадала.
+    """
+    for path in ("/tasks/", "/tasks/list", "/tasks/my", "/tasks/workload",
+                 "/tasks/new"):
+        body = client.get(path).get_data(as_text=True)
+        assert "Задачи отдела" in body, path
+        assert "РПЗ ФСТЭК" in body, path
+        assert "Угрозы SkyDNS" in body, path
+
+
+def test_card_carries_a_working_move_url(client):
+    """Адрес переноса берётся с карточки, а не собирается из строки."""
+    task = _create(client, title="Перетащить")
+    body = client.get("/tasks/").get_data(as_text=True)
+    assert f'data-move-url="/tasks/{task.id}/move"' in body
+    # Заглушки с нулевым идентификатором на странице быть не должно.
+    assert "/tasks/0/move" not in body
+
+
+def test_move_url_from_the_card_actually_works(client):
+    task = _create(client)
+    response = client.post(f"/tasks/{task.id}/move",
+                           data={"status": "in_progress"})
+    assert response.status_code in (302, 303)
+    assert db.session.get(Task, task.id).status == "in_progress"
+
+
+def test_first_column_is_named_plainly(client):
+    """«Бэклог» — жаргон; в отделе понятнее «Входящие»."""
+    body = client.get("/tasks/").get_data(as_text=True)
+    assert "Входящие" in body
+    assert "Бэклог" not in body
