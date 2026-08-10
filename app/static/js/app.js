@@ -253,6 +253,89 @@
     el.textContent = text;
   });
 
+  /* --- Доска задач: быстрое добавление ---------------------------------- */
+  document.addEventListener("click", function (e) {
+    var open = e.target.closest("[data-quick-open]");
+    if (open) {
+      var box = open.parentNode.querySelector("[data-quick-form]");
+      if (!box) return;
+      box.classList.remove("hidden");
+      open.classList.add("hidden");
+      var field = box.querySelector('input[name="title"]');
+      if (field) field.focus();
+      return;
+    }
+    var cancel = e.target.closest("[data-quick-cancel]");
+    if (cancel) {
+      var form = cancel.closest("[data-quick-form]");
+      form.classList.add("hidden");
+      var btn = form.parentNode.querySelector("[data-quick-open]");
+      if (btn) btn.classList.remove("hidden");
+    }
+  });
+
+  /* --- Доска задач: перетаскивание карточек ------------------------------ */
+  var dragged = null;
+
+  document.addEventListener("dragstart", function (e) {
+    var card = e.target.closest("[data-task]");
+    if (!card) return;
+    dragged = card;
+    card.classList.add("is-dragging");
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox начинает перетаскивание, только если что-то положить в данные.
+    e.dataTransfer.setData("text/plain", card.dataset.task);
+  });
+
+  document.addEventListener("dragend", function () {
+    if (dragged) dragged.classList.remove("is-dragging");
+    document.querySelectorAll("[data-drop]").forEach(function (zone) {
+      zone.classList.remove("is-over");
+    });
+    dragged = null;
+  });
+
+  document.addEventListener("dragover", function (e) {
+    var zone = e.target.closest("[data-drop]");
+    if (!zone || !dragged) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    zone.classList.add("is-over");
+  });
+
+  document.addEventListener("dragleave", function (e) {
+    var zone = e.target.closest("[data-drop]");
+    if (zone && !zone.contains(e.relatedTarget)) zone.classList.remove("is-over");
+  });
+
+  document.addEventListener("drop", function (e) {
+    var zone = e.target.closest("[data-drop]");
+    if (!zone || !dragged) return;
+    e.preventDefault();
+    zone.classList.remove("is-over");
+
+    var column = zone.closest("[data-status]");
+    var form = document.getElementById("moveForm");
+    if (!column || !form || !window.TASK_MOVE_URL) return;
+
+    // Карточку переносим сразу: ждать перезагрузку страницы неприятно.
+    var note = zone.querySelector("[data-empty-note]");
+    if (note) note.remove();
+    zone.appendChild(dragged);
+    refreshColumnCounts();
+
+    form.action = window.TASK_MOVE_URL.replace(/0$/, dragged.dataset.task);
+    form.querySelector("[data-move-status]").value = column.dataset.status;
+    form.submit();
+  });
+
+  function refreshColumnCounts() {
+    document.querySelectorAll("[data-status]").forEach(function (column) {
+      var counter = column.querySelector("[data-col-count]");
+      if (counter) counter.textContent = column.querySelectorAll("[data-task]").length;
+    });
+  }
+
   /* Первичный подсчёт выделения */
   updateSelectionCount("[data-select-scope]");
 })();

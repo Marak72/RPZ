@@ -8,7 +8,15 @@ from config import Config
 
 from app import create_app
 from app.extensions import db
-from app.models import ROLE_ADMIN, Task, TaskComment, TaskEvent, User, UserService
+from app.models import (
+    ROLE_ADMIN,
+    Task,
+    TaskChecklistItem,
+    TaskComment,
+    TaskEvent,
+    User,
+    UserService,
+)
 from app.portal import SERVICES
 
 
@@ -293,3 +301,195 @@ def test_csv_export_contains_the_task(client):
     assert "SOC-1" in body
     assert "Разобрать инцидент" in body
     assert "Высокий" in body
+
+
+# --- быстрое добавление с доски -------------------------------------------
+
+def test_quick_add_creates_task_in_its_column(client, app):
+    user = _add_user("ivanov")
+    client.post("/tasks/quick", data={
+        "title": "Проверить домены", "status": "todo",
+        "assignee_id": str(user.id), "priority": "high",
+        "submit_quick": "1",
+    }, follow_redirects=True)
+
+    task = Task.query.one()
+    assert task.title == "Проверить домены"
+    assert task.status == "todo"
+    assert task.assignee_id == user.id
+    assert task.reporter.username == "boss"
+
+
+def test_quick_add_without_title_creates_nothing(client):
+    client.post("/tasks/quick", data={"title": "", "status": "todo",
+                                      "assignee_id": "0", "submit_quick": "1"},
+                follow_redirects=True)
+    assert Task.query.count() == 0
+
+
+def test_quick_add_falls_back_to_backlog_on_bad_status(client):
+    client.post("/tasks/quick", data={"title": "Задача", "status": "выдуманный",
+                                      "assignee_id": "0", "submit_quick": "1"},
+                follow_redirects=True)
+    assert Task.query.one().status == "backlog"
+
+
+# --- пункты выполнения ----------------------------------------------------
+
+def test_checklist_accepts_a_pasted_list(client):
+    task = _create(client)
+    client.post(f"/tasks/{task.id}/checklist", data={
+        "text": "- Выгрузить домены\n- Проверить зону\n\n* Отписаться в письме",
+        "submit_item": "1",
+    }, follow_redirects=True)
+
+    items = TaskChecklistItem.query.order_by(TaskChecklistItem.position).all()
+    # Маркеры списка снимаются, пустые строки пропускаются.
+    assert [i.text for i in items] == ["Выгрузить домены", "Проверить зону",
+                                       "Отписаться в письме"]
+    assert [i.position for i in items] == [1, 2, 3]
+
+
+def test_checklist_progress_is_counted(client):
+    task = _create(client)
+    client.post(f"/tasks/{task.id}/checklist",
+                data={"text": "раз\nдва\nтри\nчетыре", "submit_item": "1"},
+                follow_redirects=True)
+    first = TaskChecklistItem.query.order_by(TaskChecklistItem.position).first()
+    client.post(f"/tasks/checklist/{first.id}/toggle", follow_redirects=True)
+
+    updated = db.session.get(Task, task.id)
+    assert updated.checklist_total == 4
+    assert updated.checklist_done == 1
+    assert updated.checklist_percent == 25
+
+
+def test_first_done_step_moves_task_into_progress(client):
+    """Взялись за пункт — задача уже в работе, отмечать это руками не нужно."""
+    task = _create(client, status="todo")
+    client.post(f"/tasks/{task.id}/checklist", data={"text": "шаг",
+                                                     "submit_item": "1"},
+                follow_redirects=True)
+    item = TaskChecklistItem.query.one()
+    client.post(f"/tasks/checklist/{item.id}/toggle", follow_redirects=True)
+
+    assert db.session.get(Task, task.id).status == "in_progress"
+
+
+def test_toggle_is_reversible_and_records_who(client, app):
+    task = _create(client)
+    client.post(f"/tasks/{task.id}/checklist", data={"text": "шаг",
+                                                     "submit_item": "1"},
+                follow_redirects=True)
+    item = TaskChecklistItem.query.one()
+
+    client.post(f"/tasks/checklist/{item.id}/toggle", follow_redirects=True)
+    done = db.session.get(TaskChecklistItem, item.id)
+    assert done.is_done is True
+    assert done.done_by.username == "boss"
+    assert done.done_at is not None
+
+    client.post(f"/tasks/checklist/{item.id}/toggle", follow_redirects=True)
+    undone = db.session.get(TaskChecklistItem, item.id)
+    assert undone.is_done is False
+    assert undone.done_at is None
+
+
+def test_checklist_dies_with_its_task(client):
+    task = _create(client)
+    client.post(f"/tasks/{task.id}/checklist", data={"text": "шаг",
+                                                     "submit_item": "1"},
+                follow_redirects=True)
+    client.post(f"/tasks/{task.id}/delete", follow_redirects=True)
+    assert TaskChecklistItem.query.count() == 0
+
+
+# --- срок словами ---------------------------------------------------------
+
+def test_due_label_reads_naturally(client):
+    today = date.today()
+    cases = {
+        today: "сегодня",
+        today + timedelta(days=1): "завтра",
+        today + timedelta(days=3): "через 3 дн.",
+    }
+    for due, expected in cases.items():
+        task = _create(client, title=f"з-{due}", due_date=due.isoformat())
+        assert db.session.get(Task, task.id).due_label == expected
+
+
+def test_overdue_label_counts_days(client):
+    task = _create(client, due_date=(date.today() - timedelta(days=3)).isoformat())
+    assert db.session.get(Task, task.id).due_label == "просрочена на 3 дня"
+
+
+def test_closed_task_shows_plain_date(client):
+    task = _create(client, due_date=(date.today() - timedelta(days=3)).isoformat())
+    client.post(f"/tasks/{task.id}/move", data={"status": "done"},
+                follow_redirects=True)
+    assert "просрочена" not in db.session.get(Task, task.id).due_label
+
+
+# --- моя работа и загрузка ------------------------------------------------
+
+def test_my_work_groups_by_urgency(client, app):
+    boss = User.query.filter_by(username="boss").one()
+    _create(client, title="Горит",
+            due_date=(date.today() - timedelta(days=1)).isoformat(),
+            assignee_id=str(boss.id))
+    _create(client, title="Сегодняшняя", due_date=date.today().isoformat(),
+            assignee_id=str(boss.id))
+    _create(client, title="Чужая")
+
+    body = client.get("/tasks/my").get_data(as_text=True)
+    assert "Просрочено" in body
+    assert "Горит" in body
+    assert "Сегодняшняя" in body
+    assert "Чужая" not in body
+
+
+def test_my_work_lists_tasks_i_delegated(client, app):
+    user = _add_user("ivanov")
+    _create(client, title="Поручил", assignee_id=str(user.id))
+    body = client.get("/tasks/my").get_data(as_text=True)
+    assert "Я жду результата" in body
+    assert "Поручил" in body
+
+
+def test_updates_ignore_my_own_changes(client, app):
+    boss = User.query.filter_by(username="boss").one()
+    task = _create(client, assignee_id=str(boss.id))
+    client.post(f"/tasks/{task.id}/move", data={"status": "in_progress"},
+                follow_redirects=True)
+    # Свои же правки в «что нового» не показываются.
+    assert "Изменений нет" in client.get("/tasks/my").get_data(as_text=True)
+
+
+def test_workload_shows_overdue_per_person(client, app):
+    user = _add_user("ivanov")
+    _create(client, title="Горит", assignee_id=str(user.id),
+            due_date=(date.today() - timedelta(days=2)).isoformat())
+
+    body = client.get("/tasks/workload").get_data(as_text=True)
+    assert "ivanov" in body
+    assert "Загрузка команды" in body
+
+
+def test_workload_lists_unassigned(client):
+    _create(client, title="Ничья")
+    body = client.get("/tasks/workload").get_data(as_text=True)
+    assert "Без исполнителя" in body
+    assert "Ничья" in body
+
+
+# --- права ----------------------------------------------------------------
+
+def test_viewer_cannot_use_quick_add_or_checklist(app):
+    with app.app_context():
+        _add_user("watcher", role="manager")
+    viewer = app.test_client()
+    viewer.post("/login", data={"username": "watcher", "password": "password123"})
+
+    assert viewer.post("/tasks/quick", data={"title": "нельзя"}).status_code == 403
+    assert viewer.get("/tasks/my").status_code == 200
+    assert viewer.get("/tasks/workload").status_code == 200

@@ -1,23 +1,33 @@
 {# Карточка задачи на доске. Ожидает переменную `t`. #}
-<a class="tcard {% if t.is_overdue %}tcard--overdue{% endif %}"
-   href="{{ url_for('tasks.task_view', task_id=t.id) }}">
-  <div class="tcard__top">
-    <span class="tcard__key">{{ t.key }}</span>
-    {% if t.priority == 'critical' %}<span class="badge badge--danger">критич.</span>
-    {% elif t.priority == 'high' %}<span class="badge badge--warning">высокий</span>
-    {% elif t.priority == 'low' %}<span class="badge badge--neutral">низкий</span>{% endif %}
-  </div>
-  <div class="tcard__title">{{ t.title }}</div>
-  <div class="tcard__meta">
-    {% if t.assignee %}
-    <span class="tcard__who">{{ t.assignee.display_name }}</span>
-    {% else %}
-    <span class="tcard__who tcard__who--none">не назначен</span>
+<div class="tcard {% if t.is_overdue %}tcard--overdue{% endif %} tcard--{{ t.priority }}"
+     {% if current_user.is_operator %}draggable="true" data-task="{{ t.id }}"{% endif %}>
+  <a class="tcard__link" href="{{ url_for('tasks.task_view', task_id=t.id) }}">
+    <div class="tcard__top">
+      <span class="tcard__key">{{ t.key }}</span>
+      {% if t.priority == 'critical' %}<span class="badge badge--danger">критич.</span>
+      {% elif t.priority == 'high' %}<span class="badge badge--warning">высокий</span>{% endif %}
+      {% if t.service_id %}<span class="badge badge--info">{{ t.service_id }}</span>{% endif %}
+    </div>
+    <div class="tcard__title">{{ t.title }}</div>
+
+    {% if t.checklist_total %}
+    <div class="tprogress" title="Выполнено пунктов: {{ t.checklist_done }} из {{ t.checklist_total }}">
+      <div class="tprogress__bar" style="width: {{ t.checklist_percent }}%"></div>
+    </div>
+    <div class="tcard__steps">{{ t.checklist_done }}/{{ t.checklist_total }} пунктов</div>
     {% endif %}
-    {% if t.due_date %}
-    <span class="{% if t.is_overdue %}tcard__due tcard__due--late{% else %}tcard__due{% endif %}">
-      до {{ t.due_date.strftime('%d.%m') }}</span>
-    {% endif %}
-    {% if t.service_id %}<span class="badge badge--info">{{ t.service_id }}</span>{% endif %}
-  </div>
-</a>
+
+    <div class="tcard__meta">
+      {% if t.assignee %}
+      <span class="tavatar" title="{{ t.assignee.display_name }}">{{ t.assignee.display_name[0] }}</span>
+      <span class="tcard__who">{{ t.assignee.display_name }}</span>
+      {% else %}
+      <span class="tcard__who tcard__who--none">не назначен</span>
+      {% endif %}
+      {% if t.due_label %}
+      <span class="tcard__due {% if t.is_overdue %}tcard__due--late{% endif %}">
+        {{ t.due_label }}</span>
+      {% endif %}
+    </div>
+  </a>
+</div>

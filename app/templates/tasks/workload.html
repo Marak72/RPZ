@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Загрузка{% endblock %}
+{% block subheading %}<div class="topbar__sub">Кто чем занят</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Загрузка команды</h2>
+    <p>Открытые задачи по сотрудникам. Наверху те, у кого есть просроченное —
+       с них и стоит начинать разговор.</p>
+  </div>
+  <a class="btn" href="{{ url_for('tasks.board') }}">{{ ico.icon('grid') }} К доске</a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Сотрудник</th><th class="num">Всего</th><th class="num">В работе</th>
+          <th class="num">Критичных</th><th class="num">Срок близко</th>
+          <th class="num">Просрочено</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>
+            <div class="inline">
+              <span class="tavatar">{{ row.user.display_name[0] }}</span>
+              <div>
+                {{ row.user.display_name }}
+                {% if row.user.position %}
+                <div class="text-xs muted">{{ row.user.position }}</div>
+                {% endif %}
+              </div>
+            </div>
+          </td>
+          <td class="num">{{ row.total }}</td>
+          <td class="num">{{ row.in_progress or '—' }}</td>
+          <td class="num">
+            {% if row.critical %}<span class="badge badge--danger">{{ row.critical }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">{{ row.soon or '—' }}</td>
+          <td class="num">
+            {% if row.overdue %}<span class="badge badge--danger">{{ row.overdue }}</span>
+            {% else %}<span class="badge badge--success">нет</span>{% endif %}
+          </td>
+          <td class="num nowrap">
+            <a class="btn btn--ghost btn--sm"
+               href="{{ url_for('tasks.board', assignee=row.user.id) }}">Задачи</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('alert') }}<span class="card__title">Без исполнителя</span>
+    <span class="badge {{ 'badge--warning' if unassigned else 'badge--success' }}"
+          style="margin-left:auto">{{ unassigned|length }}</span>
+  </div>
+  <div class="card__body card__body--flush">
+    {% if unassigned %}
+    <table class="table">
+      <tbody>
+        {% for t in unassigned %}
+        <tr>
+          <td>
+            <a href="{{ url_for('tasks.task_view', task_id=t.id) }}">
+              <strong>{{ t.key }}</strong> {{ t.title }}</a>
+            <div class="text-xs muted">
+              {{ t.status_title }}{% if t.due_label %} · {{ t.due_label }}{% endif %}
+            </div>
+          </td>
+          <td class="num nowrap">
+            {% if current_user.is_operator %}
+            <form method="post" action="{{ url_for('tasks.task_assign', task_id=t.id) }}"
+                  class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="back" value="{{ request.full_path }}">
+              <select name="assignee_id" class="input--auto"
+                      onchange="this.form.submit()">
+                <option value="">назначить…</option>
+                {% for p in people %}
+                <option value="{{ p.id }}">{{ p.display_name }}</option>
+                {% endfor %}
+              </select>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      {{ ico.icon('check-circle') }}
+      <div class="empty__title">Все задачи распределены</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

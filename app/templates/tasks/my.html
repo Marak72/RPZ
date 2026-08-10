@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Моя работа{% endblock %}
+{% block subheading %}<div class="topbar__sub">Что делать сейчас</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Моя работа</h2>
+    <p>
+      {% if total %}Открытых задач на мне: <strong>{{ total }}</strong>.
+        {% if fresh %}Из них ещё не в работе: {{ fresh }}.{% endif %}
+      {% else %}Открытых задач на вас нет.{% endif %}
+    </p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('tasks.board', mine='1') }}">
+      {{ ico.icon('grid') }} Мои на доске</a>
+    <a class="btn" href="{{ url_for('tasks.board') }}">{{ ico.icon('grid') }} Вся доска</a>
+  </div>
+</div>
+
+{% if not groups %}
+<div class="card">
+  <div class="empty">
+    {{ ico.icon('check-circle') }}
+    <div class="empty__title">Задач на вас нет</div>
+    <div class="empty__text">Свободны — можно взять что-нибудь из общей доски.</div>
+    <a class="btn btn--sm" href="{{ url_for('tasks.board', assignee='none') }}">
+      Задачи без исполнителя</a>
+  </div>
+</div>
+{% endif %}
+
+{% for title, items in groups %}
+<div class="queue__group">
+  <div class="queue__title">
+    {% if title == 'Просрочено' %}{{ ico.icon('alert', 'icon icon-sm') }}{% endif %}
+    {{ title }}
+    <span class="badge {{ 'badge--danger' if title == 'Просрочено' else 'badge--neutral' }}">
+      {{ items|length }}</span>
+  </div>
+  <div class="queue__list">
+    {% for t in items %}{% include "tasks/_card.html" %}{% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+<div class="grid grid--2 mt-2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('activity') }}<span class="card__title">Что нового</span>
+      {% if task_counts.updates %}
+      <span class="badge badge--warning" style="margin-left:auto">
+        {{ task_counts.updates }}</span>
+      {% endif %}
+    </div>
+    <div class="card__body card__body--flush">
+      {% if updates %}
+      <table class="table">
+        <tbody>
+          {% for e in updates %}
+          <tr>
+            <td>
+              <a href="{{ url_for('tasks.task_view', task_id=e.task_id) }}">
+                <strong>{{ e.task.key }}</strong> {{ e.task.title }}</a>
+              <div class="text-xs muted">
+                {{ e.user.display_name if e.user else '—' }}:
+                {% if e.field == 'created' %}создал задачу
+                {% else %}{{ field_titles.get(e.field, e.field)
+                            if field_titles is defined else e.field }}
+                  → <strong>{{ e.new_value or '—' }}</strong>{% endif %}
+                · {{ e.created_at.strftime('%d.%m %H:%M') }}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('activity') }}
+        <div class="empty__title">Изменений нет</div>
+        <div class="empty__text">Здесь появятся правки коллег в ваших задачах.</div>
+      </div>
+      {% endif %}
+    </div>
+    {% if updates %}
+    <div class="card__footer">
+      <form method="post" action="{{ url_for('tasks.mark_seen') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn--sm">{{ ico.icon('check') }} Я посмотрел</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('clock') }}<span class="card__title">Я жду результата</span>
+      <span class="badge badge--neutral" style="margin-left:auto">{{ waiting|length }}</span>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if waiting %}
+      <table class="table">
+        <tbody>
+          {% for t in waiting %}
+          <tr>
+            <td>
+              <a href="{{ url_for('tasks.task_view', task_id=t.id) }}">
+                <strong>{{ t.key }}</strong> {{ t.title }}</a>
+              <div class="text-xs muted">
+                {{ t.assignee.display_name if t.assignee else 'не назначена' }}
+                · {{ t.status_title }}
+                {%- if t.due_label %} · {{ t.due_label }}{% endif %}
+              </div>
+            </td>
+            <td class="num nowrap">
+              {% if t.is_overdue %}<span class="badge badge--danger">просрочена</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('clock') }}
+        <div class="empty__title">Нет задач на других</div>
+        <div class="empty__text">Здесь видны задачи, которые вы поставили коллегам.</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

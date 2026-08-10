@@ -7,15 +7,25 @@
 <div class="page-head">
   <div class="page-head__text">
     <h2>Доска задач</h2>
-    <p>Задач в выборке: {{ total }}. Карточки внутри колонки отсортированы
-       по приоритету, затем по сроку.</p>
+    <p>
+      Задач в выборке: {{ total }}.
+      {% if current_user.is_operator %}
+      Карточку можно перетащить в другую колонку — статус изменится сам.
+      {% endif %}
+    </p>
   </div>
   <div class="btn-group">
+    <a class="btn" href="{{ url_for('tasks.my_work') }}">
+      {{ ico.icon('check-circle') }} Моя работа
+      {% if task_counts.mine %}<span class="tab__count">{{ task_counts.mine }}</span>{% endif %}
+    </a>
+    <a class="btn" href="{{ url_for('tasks.workload') }}">
+      {{ ico.icon('users') }} Загрузка</a>
     <a class="btn" href="{{ url_for('tasks.task_list', **request.args) }}">
       {{ ico.icon('list') }} Списком</a>
     {% if current_user.is_operator %}
     <a class="btn btn--primary" href="{{ url_for('tasks.task_new') }}">
-      {{ ico.icon('play') }} Новая задача</a>
+      {{ ico.icon('play') }} Подробная задача</a>
     {% endif %}
   </div>
 </div>
@@ -24,21 +34,65 @@
   {% with target = 'tasks.board' %}{% include "tasks/_filters.html" %}{% endwith %}
 </div>
 
-<div class="board">
+<div class="board" data-board>
   {% for col in columns %}
-  <div class="board__col">
+  <div class="board__col" data-status="{{ col.code }}">
     <div class="board__head">
       <span>{{ col.title }}</span>
-      <span class="badge badge--neutral">{{ col.cards|length }}</span>
+      <span class="badge badge--neutral" data-col-count>{{ col.cards|length }}</span>
     </div>
-    <div class="board__body">
+
+    <div class="board__body" data-drop>
       {% for t in col.cards %}
       {% include "tasks/_card.html" %}
       {% else %}
-      <div class="board__empty">пусто</div>
+      <div class="board__empty" data-empty-note>перетащите сюда задачу</div>
       {% endfor %}
     </div>
+
+    {% if current_user.is_operator %}
+    <div class="board__add">
+      <button type="button" class="board__add-btn" data-quick-open>
+        {{ ico.icon('play', 'icon icon-sm') }} Добавить задачу
+      </button>
+      <form method="post" action="{{ url_for('tasks.task_quick') }}"
+            class="board__quick hidden" data-quick-form>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="status" value="{{ col.code }}">
+        <input type="hidden" name="back" value="{{ request.full_path }}">
+        <input type="text" name="title" placeholder="Что нужно сделать" required>
+        <select name="assignee_id">
+          <option value="0">Исполнитель —</option>
+          {% for p in people %}<option value="{{ p.id }}">{{ p.display_name }}</option>{% endfor %}
+        </select>
+        <div class="row row--tight">
+          <select name="priority">
+            <option value="normal">Обычный</option>
+            <option value="critical">Критический</option>
+            <option value="high">Высокий</option>
+            <option value="low">Низкий</option>
+          </select>
+          <input type="date" name="due_date" title="Срок">
+        </div>
+        <div class="btn-group">
+          <button class="btn btn--primary btn--sm">Добавить</button>
+          <button type="button" class="btn btn--ghost btn--sm" data-quick-cancel>Отмена</button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
   </div>
   {% endfor %}
 </div>
+
+{% if current_user.is_operator %}
+<form id="moveForm" method="post" class="hidden">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="status" data-move-status>
+  <input type="hidden" name="back" value="{{ request.full_path }}">
+</form>
+<script>
+  window.TASK_MOVE_URL = "{{ url_for('tasks.task_move', task_id=0) }}";
+</script>
+{% endif %}
 {% endblock %}

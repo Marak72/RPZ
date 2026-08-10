@@ -104,6 +104,9 @@ class User(UserMixin, db.Model):
     # но войти по ней нельзя.
     is_enabled = db.Column(db.Boolean, nullable=False, default=True)
     last_login_at = db.Column(db.DateTime)
+    # Когда сотрудник последний раз смотрел изменения в своих задачах —
+    # по этой отметке считается счётчик «что нового».
+    tasks_seen_at = db.Column(db.DateTime)
 
     grants = db.relationship(
         "UserService",
@@ -657,6 +660,10 @@ class Task(db.Model):
         "TaskComment", backref="task", cascade="all, delete-orphan",
         lazy="dynamic",
     )
+    checklist = db.relationship(
+        "TaskChecklistItem", backref="task", cascade="all, delete-orphan",
+        lazy="dynamic", order_by="TaskChecklistItem.position",
+    )
     events = db.relationship(
         "TaskEvent", backref="task", cascade="all, delete-orphan",
         lazy="dynamic",
@@ -685,8 +692,76 @@ class Task(db.Model):
             return False
         return self.due_date < datetime.utcnow().date()
 
+    @property
+    def days_left(self):
+        """Сколько дней до срока: отрицательное — просрочка, None — срока нет."""
+        if not self.due_date:
+            return None
+        return (self.due_date - datetime.utcnow().date()).days
+
+    @property
+    def due_label(self) -> str:
+        """Срок словами: «сегодня», «завтра», «просрочена на 3 дня»."""
+        left = self.days_left
+        if left is None:
+            return ""
+        if not self.is_open:
+            return self.due_date.strftime("%d.%m")
+        if left < 0:
+            days = abs(left)
+            tail = "день" if days % 10 == 1 and days % 100 != 11 else (
+                "дня" if 2 <= days % 10 <= 4 and not 12 <= days % 100 <= 14
+                else "дней"
+            )
+            return f"просрочена на {days} {tail}"
+        if left == 0:
+            return "сегодня"
+        if left == 1:
+            return "завтра"
+        if left <= 7:
+            return f"через {left} дн."
+        return self.due_date.strftime("%d.%m")
+
+    @property
+    def checklist_total(self) -> int:
+        return self.checklist.count()
+
+    @property
+    def checklist_done(self) -> int:
+        return self.checklist.filter_by(is_done=True).count()
+
+    @property
+    def checklist_percent(self) -> int:
+        total = self.checklist_total
+        return int(self.checklist_done * 100 / total) if total else 0
+
     def __repr__(self) -> str:
         return f"<Task {self.key} {self.status}>"
+
+
+class TaskChecklistItem(db.Model):
+    """Пункт выполнения задачи.
+
+    Главное средство против «я думал, надо было другое»: постановщик
+    расписывает шаги, исполнитель отмечает сделанное, и прогресс виден на
+    карточке — спрашивать «как там?» не нужно.
+    """
+
+    __tablename__ = "task_checklist"
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey("tasks.id"), nullable=False,
+                        index=True)
+    text = db.Column(db.String(500), nullable=False, default="")
+    is_done = db.Column(db.Boolean, nullable=False, default=False)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    done_at = db.Column(db.DateTime)
+    done_by_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+
+    done_by = db.relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<TaskChecklistItem {self.task_id} {self.text[:20]}>"
 
 
 class TaskComment(db.Model):

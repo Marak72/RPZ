@@ -58,6 +58,67 @@
 </div>
 {% endif %}
 
+<div class="card" style="margin-bottom:1rem">
+  <div class="card__header">
+    {{ ico.icon('check-circle') }}<span class="card__title">Пункты выполнения</span>
+    {% if task.checklist_total %}
+    <span class="badge {{ 'badge--success' if task.checklist_done == task.checklist_total else 'badge--neutral' }}"
+          style="margin-left:auto">
+      {{ task.checklist_done }} из {{ task.checklist_total }}</span>
+    {% endif %}
+  </div>
+  <div class="card__body">
+    {% if task.checklist_total %}
+    <div class="tprogress tprogress--lg" style="margin-bottom:.75rem">
+      <div class="tprogress__bar" style="width: {{ task.checklist_percent }}%"></div>
+    </div>
+    <div class="steps">
+      {% for item in checklist %}
+      <div class="step {% if item.is_done %}step--done{% endif %}">
+        {% if current_user.is_operator %}
+        <form method="post" action="{{ url_for('tasks.checklist_toggle', item_id=item.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn--ghost btn--sm" title="Отметить">
+            {{ ico.icon('check-circle' if item.is_done else 'check', 'icon icon-sm') }}
+          </button>
+        </form>
+        {% endif %}
+        <span class="step__text">{{ item.text }}</span>
+        {% if item.is_done and item.done_by %}
+        <span class="step__who">{{ item.done_by.display_name }},
+          {{ item.done_at.strftime('%d.%m %H:%M') if item.done_at else '' }}</span>
+        {% endif %}
+        {% if current_user.is_operator %}
+        <form method="post" action="{{ url_for('tasks.checklist_delete', item_id=item.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn--ghost btn--sm" title="Удалить пункт">
+            {{ ico.icon('x', 'icon icon-sm') }}</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="text-sm muted">
+      Пунктов нет. Распишите шаги — исполнителю будет понятно, что именно
+      считается сделанным, а вам не придётся спрашивать о ходе работы.
+    </p>
+    {% endif %}
+
+    {% if current_user.is_operator %}
+    <form method="post" action="{{ url_for('tasks.checklist_add', task_id=task.id) }}"
+          class="mt-2">
+      {{ checklist_form.hidden_tag() }}
+      <div class="field">
+        {{ checklist_form.text(rows=2,
+             placeholder="Один пункт в строке — можно вставить готовый список") }}
+      </div>
+      {{ checklist_form.submit_item(class="btn btn--sm") }}
+    </form>
+    {% endif %}
+  </div>
+</div>
+
 <div class="grid grid--2">
   <div class="card">
     <div class="card__header">{{ ico.icon('file') }}<span class="card__title">Описание</span></div>

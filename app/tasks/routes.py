@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from flask import (
     Blueprint,
@@ -22,10 +22,14 @@ from sqlalchemy import func, or_
 from ..extensions import db
 from ..models import (
     TASK_DONE,
+    TASK_PROGRESS,
     TASK_PRIORITIES,
+    TASK_BACKLOG,
     TASK_PRIORITY_ORDER,
+    TASK_TODO,
     TASK_STATUSES,
     Task,
+    TaskChecklistItem,
     TaskComment,
     TaskEvent,
     User,
@@ -33,7 +37,7 @@ from ..models import (
 from ..portal import SERVICES
 from ..settings_store import KEY_TASK_COUNTER, get_int, set_setting
 from ..web_utils import csv_response, fmt_dt, operator_required, service_guard
-from .forms import CommentForm, TaskForm
+from .forms import ChecklistForm, CommentForm, QuickTaskForm, TaskForm
 
 tasks_bp = Blueprint("tasks", __name__, url_prefix="/tasks")
 tasks_bp.before_request(service_guard("tasks"))
@@ -50,17 +54,27 @@ FIELD_TITLES = {
     "due_date": "срок",
     "service": "сервис",
     "created": "создана",
+    "checklist": "пункт выполнения",
 }
 
 
 @tasks_bp.app_context_processor
 def inject_task_counts():
     """Счётчики для боковой навигации сервиса."""
-    empty = {"open": 0, "mine": 0, "overdue": 0}
+    empty = {"open": 0, "mine": 0, "overdue": 0, "updates": 0}
     if not current_user.is_authenticated:
         return {"task_counts": empty}
     try:
         open_q = Task.query.filter(Task.status != TASK_DONE)
+        seen = current_user.tasks_seen_at
+        updates = (
+            TaskEvent.query.join(Task, TaskEvent.task_id == Task.id)
+            .filter(TaskEvent.user_id != current_user.id)
+            .filter(or_(Task.assignee_id == current_user.id,
+                        Task.reporter_id == current_user.id))
+        )
+        if seen:
+            updates = updates.filter(TaskEvent.created_at > seen)
         return {
             "task_counts": {
                 "open": open_q.count(),
@@ -70,6 +84,7 @@ def inject_task_counts():
                 "overdue": open_q.filter(
                     Task.due_date.isnot(None), Task.due_date < date.today()
                 ).count(),
+                "updates": updates.count(),
             }
         }
     except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
@@ -250,6 +265,7 @@ def tasks_csv():
 def task_view(task_id: int):
     task = db.get_or_404(Task, task_id)
     comment_form = CommentForm()
+    checklist_form = ChecklistForm()
 
     if comment_form.submit_comment.data and comment_form.validate_on_submit():
         if not current_user.is_operator:
@@ -268,6 +284,8 @@ def task_view(task_id: int):
         task=task,
         comment_form=comment_form,
         statuses=TASK_STATUSES,
+        checklist_form=checklist_form,
+        checklist=task.checklist.all(),
         comments=task.comments.order_by(TaskComment.created_at).all(),
         events=task.events.order_by(TaskEvent.created_at.desc()).all(),
         field_titles=FIELD_TITLES,
@@ -396,3 +414,213 @@ def task_delete(task_id: int):
     flash(f"Задача {key} удалена.", "success")
     return redirect(url_for("tasks.board"))
 
+
+
+# --- Быстрое добавление прямо в колонке -----------------------------------
+
+@tasks_bp.route("/quick", methods=["POST"])
+@operator_required
+def task_quick():
+    """Создать задачу одной строкой, не уходя с доски.
+
+    Постановщику обычно хватает названия, исполнителя и срока — полная форма
+    для этого слишком тяжёлая.
+    """
+    form = QuickTaskForm()
+    form.assignee_id.choices = [(0, "—")] + [(u.id, u.display_name)
+                                             for u in _people()]
+    if not form.validate_on_submit():
+        flash("Не удалось создать задачу: проверьте название.", "danger")
+        return redirect(_board_url())
+
+    status = form.status.data if form.status.data in dict(TASK_STATUSES) \
+        else TASK_BACKLOG
+    task = Task(
+        number=_next_number(),
+        title=form.title.data.strip(),
+        status=status,
+        priority=form.priority.data or "normal",
+        assignee_id=form.assignee_id.data or None,
+        reporter_id=current_user.id,
+        due_date=form.due_date.data,
+    )
+    db.session.add(task)
+    db.session.flush()
+    _log(task, "created", "", task.key)
+    db.session.commit()
+    flash(f"Задача {task.key} создана.", "success")
+    return redirect(_board_url())
+
+
+def _board_url() -> str:
+    back = request.form.get("back") or ""
+    if back.startswith("/"):
+        return back
+    return url_for("tasks.board")
+
+
+# --- Пункты выполнения ----------------------------------------------------
+
+@tasks_bp.route("/<int:task_id>/checklist", methods=["POST"])
+@operator_required
+def checklist_add(task_id: int):
+    task = db.get_or_404(Task, task_id)
+    form = ChecklistForm()
+    if not form.validate_on_submit():
+        flash("Введите текст пункта.", "danger")
+        return redirect(url_for("tasks.task_view", task_id=task.id))
+
+    # Несколько пунктов за раз: постановщику удобнее вставить список целиком.
+    added = 0
+    last = db.session.query(func.max(TaskChecklistItem.position)).filter_by(
+        task_id=task.id
+    ).scalar() or 0
+    for line in (form.text.data or "").splitlines():
+        line = line.strip().lstrip("-•*").strip()
+        if not line:
+            continue
+        last += 1
+        added += 1
+        db.session.add(TaskChecklistItem(task_id=task.id, text=line[:500],
+                                         position=last))
+    if added:
+        _log(task, "checklist", "", f"добавлено пунктов: {added}")
+    db.session.commit()
+    return redirect(url_for("tasks.task_view", task_id=task.id))
+
+
+@tasks_bp.route("/checklist/<int:item_id>/toggle", methods=["POST"])
+@operator_required
+def checklist_toggle(item_id: int):
+    item = db.get_or_404(TaskChecklistItem, item_id)
+    item.is_done = not item.is_done
+    item.done_at = datetime.utcnow() if item.is_done else None
+    item.done_by_id = current_user.id if item.is_done else None
+
+    task = item.task
+    # Взялись за первый пункт — задача явно в работе, не надо это делать руками.
+    if item.is_done and task.status in (TASK_BACKLOG, TASK_TODO):
+        _log(task, "status", task.status_title, dict(TASK_STATUSES)[TASK_PROGRESS])
+        task.status = TASK_PROGRESS
+    db.session.commit()
+
+    if request.form.get("ajax"):
+        return {"done": item.is_done, "percent": task.checklist_percent}
+    return redirect(url_for("tasks.task_view", task_id=item.task_id))
+
+
+@tasks_bp.route("/checklist/<int:item_id>/delete", methods=["POST"])
+@operator_required
+def checklist_delete(item_id: int):
+    item = db.get_or_404(TaskChecklistItem, item_id)
+    task_id = item.task_id
+    db.session.delete(item)
+    db.session.commit()
+    return redirect(url_for("tasks.task_view", task_id=task_id))
+
+
+# --- Моя работа -----------------------------------------------------------
+
+@tasks_bp.route("/my")
+@login_required
+def my_work():
+    """Личная очередь: что горит, что сегодня, что дальше.
+
+    Отвечает на вопрос исполнителя «за что браться сейчас» — на общей доске
+    это тонет среди чужих задач.
+    """
+    today = date.today()
+    week = today + timedelta(days=7)
+    mine = (
+        Task.query.filter(Task.assignee_id == current_user.id,
+                          Task.status != TASK_DONE)
+        .all()
+    )
+    mine.sort(key=lambda t: (TASK_PRIORITY_ORDER.get(t.priority, 9),
+                             t.due_date or date.max, -t.number))
+
+    groups = [
+        ("Просрочено", [t for t in mine if t.due_date and t.due_date < today]),
+        ("Сегодня", [t for t in mine if t.due_date == today]),
+        ("На этой неделе",
+         [t for t in mine if t.due_date and today < t.due_date <= week]),
+        ("Позже", [t for t in mine if t.due_date and t.due_date > week]),
+        ("Без срока", [t for t in mine if not t.due_date]),
+    ]
+
+    # Что поставили мне, но я ещё не брал: сюда стоит заглянуть первым делом.
+    fresh = [t for t in mine if t.status in (TASK_BACKLOG, TASK_TODO)]
+    # Задачи, где я постановщик и жду результата.
+    waiting = (
+        Task.query.filter(Task.reporter_id == current_user.id,
+                          Task.assignee_id != current_user.id,
+                          Task.status != TASK_DONE)
+        .order_by(Task.due_date.is_(None), Task.due_date)
+        .all()
+    )
+
+    return render_template(
+        "tasks/my.html",
+        groups=[(title, items) for title, items in groups if items],
+        total=len(mine),
+        fresh=len(fresh),
+        waiting=waiting,
+        updates=_recent_updates(),
+    )
+
+
+def _recent_updates(limit: int = 20) -> list:
+    """Изменения в задачах, которые касаются меня.
+
+    Свои же правки не показываем: сотруднику интересно, что сделали другие.
+    """
+    return (
+        TaskEvent.query.join(Task, TaskEvent.task_id == Task.id)
+        .filter(TaskEvent.user_id != current_user.id)
+        .filter(or_(Task.assignee_id == current_user.id,
+                    Task.reporter_id == current_user.id))
+        .order_by(TaskEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+@tasks_bp.route("/my/seen", methods=["POST"])
+@login_required
+def mark_seen():
+    """Отметить изменения просмотренными — гасит счётчик «что нового»."""
+    current_user.tasks_seen_at = datetime.utcnow()
+    db.session.commit()
+    return redirect(url_for("tasks.my_work"))
+
+
+# --- Загрузка команды -----------------------------------------------------
+
+@tasks_bp.route("/workload")
+@login_required
+def workload():
+    """Кто чем занят и у кого горит — взгляд постановщика."""
+    today = date.today()
+    rows = []
+    for person in _people():
+        tasks = Task.query.filter(Task.assignee_id == person.id,
+                                  Task.status != TASK_DONE).all()
+        rows.append({
+            "user": person,
+            "total": len(tasks),
+            "in_progress": sum(1 for t in tasks if t.status == TASK_PROGRESS),
+            "overdue": sum(1 for t in tasks
+                           if t.due_date and t.due_date < today),
+            "critical": sum(1 for t in tasks if t.priority == "critical"),
+            "soon": sum(1 for t in tasks if t.due_date
+                        and today <= t.due_date <= today + timedelta(days=3)),
+        })
+    rows.sort(key=lambda r: (-r["overdue"], -r["total"]))
+
+    unassigned = (
+        Task.query.filter(Task.assignee_id.is_(None), Task.status != TASK_DONE)
+        .order_by(Task.due_date.is_(None), Task.due_date)
+        .all()
+    )
+    return render_template("tasks/workload.html", rows=rows,
+                           unassigned=unassigned, people=_people())

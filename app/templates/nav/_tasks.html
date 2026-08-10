@@ -1,8 +1,19 @@
 {# Боковая навигация сервиса «Задачи отдела». #}
 <div class="nav-group">
+  <a class="nav-link {% if ep == 'tasks.my_work' %}is-active{% endif %}" href="{{ url_for('tasks.my_work') }}">
+    {{ ico.icon('check-circle') }} Моя работа
+    {% if task_counts.updates %}
+    <span class="nav-link__count nav-link__count--alert">{{ task_counts.updates }}</span>
+    {% elif task_counts.mine %}
+    <span class="nav-link__count">{{ task_counts.mine }}</span>
+    {% endif %}
+  </a>
   <a class="nav-link {% if ep == 'tasks.board' %}is-active{% endif %}" href="{{ url_for('tasks.board') }}">
     {{ ico.icon('grid') }} Доска
     <span class="nav-link__count">{{ task_counts.open }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'tasks.workload' %}is-active{% endif %}" href="{{ url_for('tasks.workload') }}">
+    {{ ico.icon('users') }} Загрузка команды
   </a>
   <a class="nav-link {% if ep == 'tasks.task_list' %}is-active{% endif %}" href="{{ url_for('tasks.task_list') }}">
     {{ ico.icon('list') }} Списком
@@ -11,10 +22,6 @@
 
 <div class="nav-group">
   <div class="nav-group__title">Фильтры</div>
-  <a class="nav-link" href="{{ url_for('tasks.board', mine='1') }}">
-    {{ ico.icon('check-circle') }} Мои задачи
-    <span class="nav-link__count">{{ task_counts.mine }}</span>
-  </a>
   <a class="nav-link" href="{{ url_for('tasks.board', overdue='1') }}">
     {{ ico.icon('clock') }} Просроченные
     {% if task_counts.overdue %}
