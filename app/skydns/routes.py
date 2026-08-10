@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from urllib.parse import urlsplit
 
@@ -104,6 +105,15 @@ DEFAULT_SYNC_DAYS = 7
 BATCH_LIMIT = 25
 # Сколько доменов опрашиваем в SkyDNS на устройства за одну выгрузку.
 DEVICE_BATCH = 40
+
+# Методы, доступные в диагностике настроек.
+PROBE_METHODS = (
+    skydns_client.M_TOTAL,
+    skydns_client.M_CATEGORIES,
+    skydns_client.M_DOMAINS,
+    skydns_client.M_DEVICES,
+    skydns_client.M_ACTIVITY,
+)
 
 
 def _back_url(default_endpoint: str = "skydns.domains") -> str:
@@ -996,6 +1006,7 @@ def settings():
             siem_password_set=bool(get_setting(KEY_SIEM_PASSWORD)),
             skydns_token_set=bool(get_setting(KEY_SKYDNS_TOKEN)),
             siem_filter_default=DEFAULT_SIEM_FILTER,
+            probe_methods=PROBE_METHODS,
         )
 
     if (siem_form.submit_siem.data or siem_form.test_siem.data) \
@@ -1072,6 +1083,40 @@ def _test_siem() -> None:
         flash(f"Непредвиденная ошибка проверки SIEM: {exc}", "danger")
         return
     flash("Подключение к MaxPatrol SIEM успешно: вход выполнен.", "success")
+
+
+@skydns_bp.route("/settings/probe", methods=["POST"])
+@operator_required
+def settings_probe():
+    """Показать сырой ответ метода SkyDNS — для разбора формата."""
+    method = (request.form.get("method") or "").strip()
+    if method not in PROBE_METHODS:
+        flash("Неизвестный метод диагностики.", "danger")
+        return redirect(url_for("skydns.settings"))
+
+    days = get_int(KEY_SKYDNS_DAYS, DEFAULT_SYNC_DAYS)
+    end = date.today()
+    start = end - timedelta(days=days)
+    try:
+        result = SkydnsClient(load_skydns_config()).probe(method, start, end)
+    except SkydnsError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("skydns.settings"))
+    except Exception as exc:  # noqa: BLE001
+        current_app.logger.exception("Ошибка диагностики SkyDNS")
+        flash(f"Непредвиденная ошибка диагностики: {exc}", "danger")
+        return redirect(url_for("skydns.settings"))
+
+    return render_template(
+        "skydns/probe.html",
+        method=method,
+        methods=PROBE_METHODS,
+        period=(start, end),
+        result=result,
+        pretty=json.dumps(result.get("response"), ensure_ascii=False, indent=2),
+        request_pretty=json.dumps(result.get("request"), ensure_ascii=False,
+                                  indent=2),
+    )
 
 
 def _test_skydns() -> None:

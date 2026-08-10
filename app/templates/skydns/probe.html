@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Диагностика SkyDNS{% endblock %}
+{% block subheading %}<div class="topbar__sub">{{ method }}</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Ответ SkyDNS без обработки</h2>
+    <p>Что именно вернул сервер на метод <code>{{ method }}</code> за период
+       {{ period[0].strftime('%d.%m.%Y') }} — {{ period[1].strftime('%d.%m.%Y') }}.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('skydns.settings') }}">← К настройкам</a>
+    <button type="button" class="btn" data-copy="{{ pretty }}">
+      {{ ico.icon('copy') }} Скопировать ответ
+    </button>
+  </div>
+</div>
+
+<div class="note">
+  Если разбор ответа не срабатывает, пришлите этот текст — по нему видно точный
+  формат отчёта вашей подписки. Секретов в ответе нет: токен передаётся только
+  в заголовке запроса и здесь не показывается.
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('upload') }}<span class="card__title">Запрос</span></div>
+  <div class="card__body">
+    <div class="kv">
+      <dt>URL</dt><dd class="mono">{{ result.url }}</dd>
+    </div>
+    <pre class="log mt-1">{{ request_pretty }}</pre>
+  </div>
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('download') }}<span class="card__title">Ответ</span>
+    <span class="badge badge--neutral" style="margin-left:auto">
+      {% if result.response is mapping %}объект
+      {% elif result.response is sequence and result.response is not string %}список из {{ result.response|length }}
+      {% else %}{{ result.response.__class__.__name__ }}{% endif %}
+    </span>
+  </div>
+  <div class="card__body">
+    <pre class="log log--dark">{{ pretty }}</pre>
+  </div>
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('search') }}<span class="card__title">Другой метод</span></div>
+  <div class="card__body">
+    <form method="post" action="{{ url_for('skydns.settings_probe') }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select name="method" class="input--auto">
+        {% for m in methods %}
+        <option value="{{ m }}" {% if m == method %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn--primary btn--sm">{{ ico.icon('play') }} Выполнить</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -295,3 +295,110 @@ def test_json_body_is_sent_as_post(monkeypatch):
     assert seen["auth"] == "Token secret"
     assert seen["body"] == {"period": "date"}
     assert seen["url"].endswith("/proxy/v2/get_domains_activity/")
+
+
+# --- асинхронный отчёт и диагностика --------------------------------------
+
+def _polling_client(monkeypatch, responses):
+    """Клиент, отдающий заготовленные ответы по одному на запрос."""
+    config = SkydnsConfig(user_id="1", token="t", report_timeout=5)
+    client = SkydnsClient(config)
+    queue = list(responses)
+    # Последний ответ повторяется: так проверяется поведение при затянувшемся
+    # формировании отчёта, не завися от числа попыток.
+    monkeypatch.setattr(
+        client, "_call",
+        lambda m, p: queue.pop(0) if len(queue) > 1 else queue[0],
+    )
+    monkeypatch.setattr(skydns_client.time, "sleep", lambda _s: None)
+    return client
+
+
+def test_report_waits_until_ready(monkeypatch):
+    """Пока отчёт строится, приходит статус — запрос повторяется."""
+    client = _polling_client(monkeypatch, [
+        {"status": "pending"},
+        {"status": "in_progress"},
+        [{"cat": {"id": 3, "title": "Malware", "is_dangerous": True}}],
+    ])
+    cats = client.categories(START, END)
+    assert [c.id for c in cats] == [3]
+
+
+def test_report_unwraps_envelope(monkeypatch):
+    """Отчёт может лежать внутри конверта — достаём его оттуда."""
+    client = _polling_client(monkeypatch, [
+        {"status": "ready", "result": [
+            {"domain": "evil.ru", "requests": 5, "cat_ids": [3]},
+        ]},
+    ])
+    stats = client.domains(START, END)
+    assert [s.domain for s in stats] == ["evil.ru"]
+
+
+def test_report_unwraps_data_key_without_status(monkeypatch):
+    client = _polling_client(monkeypatch, [
+        {"data": [{"domain": "evil.ru"}]},
+    ])
+    assert [s.domain for s in client.domains(START, END)] == ["evil.ru"]
+
+
+def test_report_gives_up_with_the_last_response(monkeypatch):
+    """Не дождались — в ошибке видно, что именно отвечал сервер."""
+    client = _polling_client(monkeypatch, [{"status": "pending"}])
+    with pytest.raises(SkydnsError) as exc:
+        client.categories(START, END)
+    assert "pending" in str(exc.value)
+    assert "get_categories_activity" in str(exc.value)
+
+
+def test_failed_status_is_reported_with_detail(monkeypatch):
+    client = _polling_client(monkeypatch, [
+        {"status": "error", "detail": "период слишком большой"},
+    ])
+    with pytest.raises(SkydnsError, match="период слишком большой"):
+        client.categories(START, END)
+
+
+def test_error_body_without_status_is_reported(monkeypatch):
+    """Ответ вида {"detail": "..."} — это ошибка, а не отчёт."""
+    client = _polling_client(monkeypatch, [
+        {"detail": "Authentication credentials were not provided."},
+    ])
+    with pytest.raises(SkydnsError, match="Authentication credentials"):
+        client.categories(START, END)
+
+
+def test_unexpected_response_shows_what_came_back(monkeypatch):
+    """Главное свойство: в ошибке виден реальный ответ, а не общая фраза."""
+    client = _polling_client(monkeypatch, [12345])
+    with pytest.raises(SkydnsError) as exc:
+        client.categories(START, END)
+    message = str(exc.value)
+    assert "12345" in message
+    assert "get_categories_activity" in message
+
+
+def test_total_activity_accepts_plain_dict(monkeypatch):
+    """У сводки ответ — объект, и это не конверт статуса."""
+    client = _polling_client(monkeypatch, [
+        {"requests": 10, "blocks": 2, "dangerous_requests": 1},
+    ])
+    assert client.total_activity(START, END)["requests"] == 10
+
+
+def test_total_activity_waits_for_envelope(monkeypatch):
+    client = _polling_client(monkeypatch, [
+        {"status": "processing"},
+        {"status": "done", "result": {"requests": 7, "blocks": 1}},
+    ])
+    assert client.total_activity(START, END)["requests"] == 7
+
+
+def test_probe_returns_raw_response(monkeypatch):
+    """Диагностика отдаёт ответ как есть, без разбора."""
+    client = _polling_client(monkeypatch, [{"status": "pending"}])
+    result = client.probe("get_categories_activity", START, END)
+    assert result["response"] == {"status": "pending"}
+    assert result["url"].endswith("/proxy/v2/get_categories_activity/")
+    assert result["request"]["period"] == "range"

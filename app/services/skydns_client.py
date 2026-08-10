@@ -30,6 +30,7 @@ import io
 import json
 import socket
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -68,9 +69,108 @@ DANGEROUS_CATEGORY_IDS = {
 # Признак «трафик пришёл через шлюз, конечный хост неизвестен».
 GATEWAY_TOKEN = 0
 
+# Отчёт формируется асинхронно: запрос ставит задачу, и до готовности приходит
+# конверт со статусом (инструкция, раздел «Статусы»). Названия статусов в
+# инструкции к нашей подписке не приведены, поэтому разбор намеренно широкий.
+STATUS_KEYS = ("status", "state", "task_status", "job_status")
+STATUS_PENDING = {
+    "pending", "in_progress", "in-progress", "progress", "processing",
+    "running", "queued", "in_queue", "new", "created", "started", "wait",
+    "waiting", "not_ready", "notready",
+}
+STATUS_READY = {"ready", "done", "success", "successful", "finished",
+                "completed", "complete", "ok"}
+STATUS_FAILED = {"error", "failed", "failure", "canceled", "cancelled",
+                 "aborted", "timeout"}
+
+# Ключи, под которыми может лежать сам отчёт, если ответ обёрнут.
+DATA_KEYS = ("result", "results", "data", "report", "rows", "items",
+             "objects", "response", "payload")
+
+# Сколько ждать готовности отчёта. Запрос идёт синхронно в веб-запросе,
+# поэтому ожидание ограничено: лучше внятная ошибка, чем таймаут gunicorn.
+REPORT_TIMEOUT = 120
+POLL_START = 2
+POLL_MAX = 8
+
 
 class SkydnsError(Exception):
     """Ошибка обращения к SkyDNS, пригодная для показа оператору."""
+
+
+class SkydnsNotReady(SkydnsError):
+    """Отчёт ещё формируется — нужно подождать и спросить снова."""
+
+
+def _excerpt(payload, limit: int = 400) -> str:
+    """Кусок ответа для сообщения об ошибке.
+
+    Без него оператор видит «неожиданный ответ» и не может ничего сделать.
+    """
+    try:
+        text = json.dumps(payload, ensure_ascii=False)
+    except (TypeError, ValueError):
+        text = str(payload)
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _status_of(payload) -> str:
+    """Статус задачи из конверта ответа, если он там есть."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in STATUS_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    return ""
+
+
+def _payload_data(payload):
+    """Достать полезную нагрузку, если ответ обёрнут в конверт."""
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return None
+    for key in DATA_KEYS:
+        if key in payload:
+            nested = payload[key]
+            if isinstance(nested, (list, dict)):
+                return nested
+    return None
+
+
+def _found_of_type(payload, wanted):
+    """Найти в ответе значение нужного типа: в нём самом или в обёртке.
+
+    Конверт статуса — тоже словарь, поэтому сам ответ засчитывается за данные,
+    только если статуса в нём нет.
+    """
+    if isinstance(payload, wanted) and not _status_of(payload):
+        return payload
+
+    nested = _payload_data(payload)
+    if isinstance(nested, wanted):
+        return nested
+    if nested is not None and nested is not payload:
+        deeper = _payload_data(nested)
+        if isinstance(deeper, wanted):
+            return deeper
+    return None
+
+
+def _error_text(payload) -> str:
+    """Сообщение об ошибке из ответа: DRF и подобные кладут его по-разному."""
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("detail", "error", "message", "error_message", "reason"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, dict):
+            nested = _error_text(value)
+            if nested:
+                return nested
+    return ""
 
 
 @dataclass
@@ -83,6 +183,8 @@ class SkydnsConfig:
     timezone: str = "UTC"
     verify_ssl: bool = True
     timeout: int = 90
+    # Сколько всего ждать готовности асинхронного отчёта, секунд.
+    report_timeout: int = REPORT_TIMEOUT
 
     @property
     def is_configured(self) -> bool:
@@ -247,6 +349,77 @@ class SkydnsClient:
                 "Проверьте адрес API и ID пользователя."
             ) from exc
 
+    def _report(self, method: str, payload: dict, expect: str = "list"):
+        """Получить отчёт, дождавшись его формирования.
+
+        Отчёт строится асинхронно: пока он не готов, приходит конверт со
+        статусом. Здесь запрос повторяется до готовности, но не дольше
+        ``report_timeout`` — операция идёт синхронно в веб-запросе.
+        """
+        deadline = time.monotonic() + max(self.config.report_timeout, 1)
+        delay = POLL_START
+        last = None
+
+        while True:
+            last = self._call(method, payload)
+            data = self._unwrap(method, last, expect)
+            if data is not None:
+                return data
+
+            if time.monotonic() >= deadline:
+                raise SkydnsError(
+                    f"SkyDNS не успел сформировать отчёт {method} за "
+                    f"{self.config.report_timeout} с. Последний ответ: "
+                    f"{_excerpt(last)}"
+                )
+            time.sleep(min(delay, max(0, deadline - time.monotonic())))
+            delay = min(delay * 2, POLL_MAX)
+
+    def _unwrap(self, method: str, payload, expect: str):
+        """Разобрать ответ: данные, «ещё не готово» или ошибка.
+
+        Возвращает данные нужного типа либо ``None``, если отчёт ещё строится.
+        Всё остальное — ошибка с куском реального ответа: без него в интерфейсе
+        видно только «неожиданный ответ», и разобраться невозможно.
+        """
+        wanted = list if expect == "list" else dict
+        status = _status_of(payload)
+
+        # Конверт задачи: у него есть статус, а сам отчёт лежит внутри.
+        if status:
+            if status in STATUS_FAILED:
+                raise SkydnsError(
+                    f"SkyDNS вернул ошибку на {method}: "
+                    f"{_error_text(payload) or status}. "
+                    f"Ответ: {_excerpt(payload)}"
+                )
+            data = _found_of_type(payload, wanted)
+            if data is not None:
+                return data
+            if status in STATUS_READY and isinstance(payload, wanted):
+                # Готово, но вложенного отчёта нет — значит отчёт и есть конверт.
+                return payload
+            # Не готово (или статус незнакомый) — вызывающий подождёт.
+            return None
+
+        # Обычный ответ: либо сразу нужного вида, либо в обёртке.
+        data = _found_of_type(payload, wanted)
+        if data is not None:
+            return data
+
+        message = _error_text(payload)
+        if message:
+            raise SkydnsError(
+                f"SkyDNS вернул ошибку на {method}: {message}. "
+                f"Ответ: {_excerpt(payload)}"
+            )
+
+        raise SkydnsError(
+            f"SkyDNS вернул неожиданный ответ на {method} "
+            f"(ожидался {'список' if wanted is list else 'объект'}). "
+            f"Ответ: {_excerpt(payload)}"
+        )
+
     def _period(self, start: date | None, end: date | None,
                 period: str = "range") -> dict:
         return build_period(
@@ -259,8 +432,7 @@ class SkydnsClient:
 
     def total_activity(self, start: date, end: date | None = None) -> dict:
         """Сводка активности — используется для проверки подключения."""
-        payload = self._call(M_TOTAL, self._period(start, end))
-        return payload if isinstance(payload, dict) else {}
+        return self._report(M_TOTAL, self._period(start, end), expect="dict")
 
     def categories(self, start: date, end: date | None = None,
                    lang: str = "ru") -> list:
@@ -268,9 +440,7 @@ class SkydnsClient:
         payload = self._period(start, end)
         if lang:
             payload["lang"] = lang
-        rows = self._call(M_CATEGORIES, payload)
-        if not isinstance(rows, list):
-            raise SkydnsError("Неожиданный ответ на get_categories_activity.")
+        rows = self._report(M_CATEGORIES, payload)
 
         result = []
         for row in rows:
@@ -309,9 +479,7 @@ class SkydnsClient:
         if order_by:
             payload["order_by"] = order_by
 
-        rows = self._call(M_DOMAINS, payload)
-        if not isinstance(rows, list):
-            raise SkydnsError("Неожиданный ответ на get_domains_activity.")
+        rows = self._report(M_DOMAINS, payload)
 
         result = []
         for row in rows:
@@ -343,9 +511,7 @@ class SkydnsClient:
         if limit:
             payload["limit"] = int(limit)
 
-        rows = self._call(M_DEVICES, payload)
-        if not isinstance(rows, list):
-            raise SkydnsError("Неожиданный ответ на get_devices_activity.")
+        rows = self._report(M_DEVICES, payload)
 
         result = []
         for row in rows:
@@ -361,6 +527,19 @@ class SkydnsClient:
             ))
         return result
 
+    def probe(self, method: str, start: date, end: date | None = None) -> dict:
+        """Сырой ответ метода — для диагностики в интерфейсе.
+
+        Формат отчётов у разных подписок отличается, а разбор ответа делается
+        «вслепую». Эта кнопка показывает, что именно вернул сервер.
+        """
+        payload = self._period(start, end)
+        return {
+            "url": self._url(method),
+            "request": payload,
+            "response": self._call(method, payload),
+        }
+
     def detailed(
         self,
         start: date,
@@ -375,9 +554,7 @@ class SkydnsClient:
         if limit:
             payload["limit"] = int(limit)
 
-        rows = self._call(M_DETAILED, payload)
-        if not isinstance(rows, list):
-            raise SkydnsError("Неожиданный ответ на get_detailed_activity.")
+        rows = self._report(M_DETAILED, payload)
         return [row for row in rows if isinstance(row, dict)]
 
 

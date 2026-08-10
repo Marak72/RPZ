@@ -92,6 +92,25 @@
   </div>
 </form>
 
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('search') }}<span class="card__title">Диагностика ответа</span>
+  </div>
+  <div class="card__body">
+    <p class="text-sm muted">
+      Показывает ответ SkyDNS без обработки. Пригодится, если выгрузка ругается
+      на неожиданный формат: по сырому ответу видно, что именно вернул сервер.
+    </p>
+    <form method="post" action="{{ url_for('skydns.settings_probe') }}" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select name="method" class="input--auto">
+        {% for m in probe_methods %}<option value="{{ m }}">{{ m }}</option>{% endfor %}
+      </select>
+      <button class="btn">{{ ico.icon('play') }} Показать сырой ответ</button>
+    </form>
+  </div>
+</div>
+
 <form method="post" class="mt-2">
   {{ siem_form.hidden_tag() }}
   <div class="card">
