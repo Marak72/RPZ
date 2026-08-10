@@ -87,7 +87,13 @@ from ..settings_store import (
     load_skydns_config,
     set_setting,
 )
-from ..web_utils import csv_response, fmt_dt, operator_required, service_guard
+from ..web_utils import (
+    LazyCounts,
+    csv_response,
+    fmt_dt,
+    operator_required,
+    service_guard,
+)
 from .forms import (
     ImportForm,
     ManualThreatForm,
@@ -135,28 +141,26 @@ def _back_url(default_endpoint: str = "skydns.domains") -> str:
     return url_for(default_endpoint)
 
 
+SKYDNS_COUNTS_EMPTY = {"threats": 0, "new": 0, "hosts": 0, "blocked": 0}
+
+
+def _skydns_counts() -> dict:
+    return {
+        "threats": ThreatDomain.query.count(),
+        "new": ThreatDomain.query.filter_by(status=THREAT_NEW).count(),
+        "hosts": db.session.query(
+            func.count(func.distinct(ThreatHost.address))
+        ).scalar() or 0,
+        "blocked": ThreatDomain.query.filter_by(status=THREAT_BLOCKED).count(),
+    }
+
+
 @skydns_bp.app_context_processor
 def inject_skydns_counts():
-    """Счётчики для боковой навигации сервиса."""
-    empty = {"threats": 0, "new": 0, "hosts": 0, "blocked": 0}
+    """Счётчики для боковой навигации — считаются, только если нужны."""
     if not current_user.is_authenticated:
-        return {"skydns_counts": empty}
-    try:
-        return {
-            "skydns_counts": {
-                "threats": ThreatDomain.query.count(),
-                "new": ThreatDomain.query.filter_by(status=THREAT_NEW).count(),
-                "hosts": db.session.query(
-                    func.count(func.distinct(ThreatHost.address))
-                ).scalar() or 0,
-                "blocked": ThreatDomain.query.filter_by(
-                    status=THREAT_BLOCKED
-                ).count(),
-            }
-        }
-    except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
-        current_app.logger.exception("Не удалось посчитать счётчики SkyDNS")
-        return {"skydns_counts": empty}
+        return {"skydns_counts": LazyCounts(dict, SKYDNS_COUNTS_EMPTY)}
+    return {"skydns_counts": LazyCounts(_skydns_counts, SKYDNS_COUNTS_EMPTY)}
 
 
 # --- Дашборд --------------------------------------------------------------
@@ -205,9 +209,21 @@ def dashboard():
         SkydnsSyncLog.query.order_by(SkydnsSyncLog.started_at.desc()).limit(5).all()
     )
 
+    # Категории угроз с счётчиками последней выгрузки — та же картина, что в
+    # личном кабинете SkyDNS, но со ссылкой на разбор.
+    danger_cats = (
+        SkydnsCategory.query
+        .filter(SkydnsCategory.is_dangerous.is_(True))
+        .order_by(SkydnsCategory.requests.desc())
+        .all()
+    )
+    danger_total = sum(c.requests for c in danger_cats) or 0
+
     return render_template(
         "skydns/dashboard.html",
         stats=stats,
+        danger_cats=danger_cats,
+        danger_total=danger_total,
         top_categories=top_categories,
         top_hosts=top_hosts,
         recent_threats=recent_threats,
@@ -229,7 +245,15 @@ def _threats_query():
     if status:
         query = query.filter(ThreatDomain.status == status)
     if category:
-        query = query.filter(ThreatDomain.category == category)
+        # В category лежит идентификатор основной категории, но домен может
+        # относиться сразу к нескольким — ищем и по полному списку.
+        query = query.filter(db.or_(
+            ThreatDomain.category == category,
+            ThreatDomain.cat_ids == category,
+            ThreatDomain.cat_ids.like(f"{category},%"),
+            ThreatDomain.cat_ids.like(f"%,{category},%"),
+            ThreatDomain.cat_ids.like(f"%,{category}"),
+        ))
     return query
 
 
@@ -242,14 +266,21 @@ def domains():
         .order_by(ThreatDomain.last_seen.desc(), ThreatDomain.domain)
         .paginate(page=page, per_page=PER_PAGE, error_out=False)
     )
-    categories = [
-        row[0] for row in
-        db.session.query(ThreatDomain.category)
-        .filter(ThreatDomain.category != "")
-        .distinct()
-        .order_by(ThreatDomain.category)
-        .all()
-    ]
+    # Для фильтра нужны названия: в базе у домена лежит идентификатор.
+    used = {row[0] for row in
+            db.session.query(ThreatDomain.category)
+            .filter(ThreatDomain.category != "").distinct().all()}
+    catalogue = _catalogue()
+    categories = sorted(
+        (
+            (code, (catalogue[int(code)].title
+                    if code.isdigit() and int(code) in catalogue
+                    else skydns_client.DANGEROUS_CATEGORY_IDS.get(
+                        int(code), code) if code.isdigit() else code))
+            for code in used
+        ),
+        key=lambda pair: pair[1],
+    )
     return render_template(
         "skydns/domains.html",
         items=pagination.items,
@@ -602,8 +633,23 @@ def _sync_categories(client, start: date, end: date) -> int:
             db.session.add(row)
         row.title = item.title or row.title or ""
         row.is_dangerous = item.is_dangerous
+        row.requests = item.requests
+        row.blocks = item.blocks
     db.session.commit()
     return sum(1 for c in categories if c.is_dangerous)
+
+
+def _recount_categories() -> None:
+    """Пересчитать, сколько доменов набралось в каждой категории."""
+    counts: dict = {}
+    for threat in ThreatDomain.query.all():
+        for raw in (threat.cat_ids or "").split(","):
+            raw = raw.strip()
+            if raw.isdigit():
+                counts[int(raw)] = counts.get(int(raw), 0) + 1
+    for row in SkydnsCategory.query.all():
+        row.domains_count = counts.get(row.id, 0)
+    db.session.commit()
 
 
 def _upsert_stats(stats, source: str, tracked: set | None = None) -> tuple:
@@ -775,6 +821,7 @@ def _do_api_sync(form):
         return redirect(url_for("skydns.sync"))
 
     total, new = _upsert_stats(stats, THREAT_SOURCE_API, tracked=set(tracked))
+    _recount_categories()
 
     # 3. Устройства: часть конечных хостов SkyDNS знает сам, без SIEM.
     devices_found = 0
@@ -785,10 +832,13 @@ def _do_api_sync(form):
     log.finished_at = datetime.utcnow()
     log.domains_total = total
     log.domains_new = new
+    limit = get_int(KEY_SKYDNS_LIMIT, DEFAULT_SKYDNS_LIMIT)
+    hit_limit = len(stats) >= limit
     log.message = (
         f"Опасных категорий в справочнике: {dangerous}; отслеживается: "
         f"{len(tracked)}. Доменов в ответе: {len(stats)}; сохранено: {total}; "
         f"новых: {new}; хостов от SkyDNS: {devices_found}."
+        + (f" Выборка упёрлась в лимит {limit}." if hit_limit else "")
     )
     db.session.commit()
     flash(
@@ -796,6 +846,15 @@ def _do_api_sync(form):
         f"из них новых: {new}. Хостов найдено сразу: {devices_found}.",
         "success",
     )
+    if hit_limit:
+        # Молча потерять часть доменов хуже, чем показать длинное сообщение.
+        flash(
+            f"Выборка упёрлась в лимит {limit} доменов — за период их больше. "
+            "Домены отсортированы по числу обращений, поэтому самое заметное "
+            "уже загружено. Чтобы забрать остальное, поднимите лимит в "
+            "настройках или загрузите период по дням.",
+            "warning",
+        )
     return redirect(url_for("skydns.domains"))
 
 

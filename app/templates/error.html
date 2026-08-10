@@ -9,7 +9,7 @@
     {{ ico.icon('alert', 'icon') }}
     <div style="font-size:2.5rem;font-weight:660;color:var(--text-dim);line-height:1">{{ code }}</div>
     <div class="empty__title mt-1">{{ title }}</div>
-    <div class="empty__text">{{ message }}</div>
+    <div class="empty__text alert__text--pre">{{ message }}</div>
     <a href="{{ url_for('hub.index') }}" class="btn btn--primary btn--sm">{{ ico.icon('grid') }} На главную</a>
   </div>
 </div>

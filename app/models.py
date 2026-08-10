@@ -518,6 +518,10 @@ class SkydnsCategory(db.Model):
     # Ручное переопределение: категорию можно принудительно включить в разбор
     # или исключить из него, не дожидаясь изменений на стороне SkyDNS.
     track_override = db.Column(db.Boolean)
+    # Счётчики последней выгрузки — чтобы видеть, откуда идёт основной поток.
+    requests = db.Column(db.Integer, nullable=False, default=0)
+    blocks = db.Column(db.Integer, nullable=False, default=0)
+    domains_count = db.Column(db.Integer, nullable=False, default=0)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow,
                            onupdate=datetime.utcnow)
 

@@ -371,3 +371,121 @@ def test_manager_cannot_run_lookup(app):
     response = viewer.post(f"/skydns/domains/{threat_id}/lookup")
     assert response.status_code == 403
     assert SiemQueryLog.query.count() == 0
+
+
+# --- категории угроз и лимит выборки --------------------------------------
+
+def _fake_skydns(monkeypatch, cats, domains, hosts=None):
+    from app.services.skydns_client import Category, DomainStat  # noqa: F401
+
+    class FakeSkydns:
+        def __init__(self, config):
+            pass
+
+        def categories(self, start, end, lang="ru"):
+            return cats
+
+        def domains(self, start, end, cats=None, limit=None, order_by="-visits"):
+            FakeSkydns.limit = limit
+            return domains
+
+        def hosts_by_domain(self, start, end, cats=None, limit=None):
+            return hosts or {}
+
+    monkeypatch.setattr(skydns_routes, "SkydnsClient", FakeSkydns)
+    return FakeSkydns
+
+
+def _sync(client):
+    return client.post("/skydns/sync", data={
+        "start": "2026-08-01", "end": "2026-08-07", "submit_sync": "1",
+    }, follow_redirects=True)
+
+
+def test_category_counters_are_saved(client, monkeypatch):
+    """Счётчики по категориям нужны, чтобы видеть, откуда идёт поток."""
+    from app.services.skydns_client import Category, DomainStat
+
+    _fake_skydns(
+        monkeypatch,
+        [Category(73, "DNS-туннелирование", True, requests=24563, blocks=0),
+         Category(3, "Malware", True, requests=294, blocks=0)],
+        [DomainStat("evil.ru", requests=42, cat_ids=[3])],
+    )
+    _sync(client)
+
+    tunnel = db.session.get(SkydnsCategory, 73)
+    assert tunnel.requests == 24563
+    assert tunnel.is_dangerous is True
+    # Доменов в этой категории не набралось — счётчик честно нулевой.
+    assert tunnel.domains_count == 0
+    assert db.session.get(SkydnsCategory, 3).domains_count == 1
+
+
+def test_dashboard_shows_threat_categories(client, monkeypatch):
+    from app.services.skydns_client import Category, DomainStat
+
+    _fake_skydns(
+        monkeypatch,
+        [Category(73, "DNS-туннелирование", True, requests=24563)],
+        [DomainStat("evil.ru", requests=42, cat_ids=[73])],
+    )
+    _sync(client)
+
+    body = client.get("/skydns/").get_data(as_text=True)
+    assert "Категории угроз" in body
+    assert "DNS-туннелирование" in body
+    assert "24 563" in body
+
+
+def test_hitting_the_limit_is_reported(client, monkeypatch):
+    """Упор в лимит нельзя проглатывать: часть доменов осталась в SkyDNS."""
+    from app.services.skydns_client import Category, DomainStat
+
+    fake = _fake_skydns(
+        monkeypatch,
+        [Category(3, "Malware", True)],
+        [DomainStat(f"evil{i}.ru", requests=i, cat_ids=[3]) for i in range(2000)],
+    )
+    body = _sync(client).get_data(as_text=True)
+
+    assert fake.limit == 2000
+    assert "упёрлась в лимит" in body
+
+
+def test_no_limit_warning_when_everything_fits(client, monkeypatch):
+    from app.services.skydns_client import Category, DomainStat
+
+    _fake_skydns(monkeypatch, [Category(3, "Malware", True)],
+                 [DomainStat("evil.ru", requests=1, cat_ids=[3])])
+    assert "упёрлась в лимит" not in _sync(client).get_data(as_text=True)
+
+
+def test_category_filter_matches_every_category_of_a_domain(client, monkeypatch):
+    """Домен часто относится к нескольким категориям — искать надо по всем."""
+    from app.services.skydns_client import Category, DomainStat
+
+    _fake_skydns(
+        monkeypatch,
+        [Category(3, "Malware", True), Category(4, "Phishing", True)],
+        [DomainStat("evil.ru", requests=5, cat_ids=[3, 4])],
+    )
+    _sync(client)
+
+    # Основная категория — первая опасная, но по второй домен тоже находится.
+    assert "evil.ru" in client.get("/skydns/domains?category=3").get_data(as_text=True)
+    assert "evil.ru" in client.get("/skydns/domains?category=4").get_data(as_text=True)
+    assert "evil.ru" not in client.get(
+        "/skydns/domains?category=99").get_data(as_text=True)
+
+
+def test_category_filter_shows_titles_not_ids(client, monkeypatch):
+    from app.services.skydns_client import Category, DomainStat
+
+    _fake_skydns(monkeypatch, [Category(3, "Malware", True)],
+                 [DomainStat("evil.ru", requests=1, cat_ids=[3])])
+    _sync(client)
+
+    body = client.get("/skydns/domains").get_data(as_text=True)
+    assert '<option value="3"' in body
+    assert ">Malware</option>" in body

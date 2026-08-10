@@ -1,5 +1,5 @@
 /* ==========================================================================
-   РПЗ ФСТЭК — дизайн-система инструмента SOC.
+   Портал SOC — дизайн-система отдела противодействия кибератакам.
    Самодостаточный CSS: без внешних CDN, работает в изолированной сети.
    ========================================================================== */
 
@@ -786,6 +786,15 @@ tr:hover .copy-btn { opacity: 1; }
   letter-spacing: .04em; color: var(--text-muted);
 }
 .queue__list { display: grid; gap: .5rem; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+/* Доля категории в объёме запросов. */
+.share { display: flex; align-items: center; gap: .5rem; justify-content: flex-end; }
+.share__value { font-variant-numeric: tabular-nums; min-width: 3.25rem; text-align: right; }
+.share__bar {
+  display: block; width: 70px; height: 6px; flex: none;
+  background: var(--surface-3); border-radius: 999px; overflow: hidden;
+}
+.share__bar i { display: block; height: 100%; background: var(--danger); }
 
 .comment {
   border-left: 2px solid var(--border);

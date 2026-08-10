@@ -38,8 +38,8 @@
       </div>
       <select name="category" class="input--auto" onchange="this.form.submit()">
         <option value="">Все категории</option>
-        {% for cat in categories %}
-        <option value="{{ cat }}" {% if category == cat %}selected{% endif %}>{{ cat }}</option>
+        {% for code, title in categories %}
+        <option value="{{ code }}" {% if category == code %}selected{% endif %}>{{ title }}</option>
         {% endfor %}
       </select>
       <button class="btn btn--sm">Применить</button>

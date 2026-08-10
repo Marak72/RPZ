@@ -36,7 +36,13 @@ from ..models import (
 )
 from ..portal import SERVICES
 from ..settings_store import KEY_TASK_COUNTER, get_int, set_setting
-from ..web_utils import csv_response, fmt_dt, operator_required, service_guard
+from ..web_utils import (
+    LazyCounts,
+    csv_response,
+    fmt_dt,
+    operator_required,
+    service_guard,
+)
 from .forms import ChecklistForm, CommentForm, QuickTaskForm, TaskForm
 
 tasks_bp = Blueprint("tasks", __name__, url_prefix="/tasks")
@@ -58,37 +64,34 @@ FIELD_TITLES = {
 }
 
 
+TASK_COUNTS_EMPTY = {"open": 0, "mine": 0, "overdue": 0, "updates": 0}
+
+
+def _task_counts() -> dict:
+    open_q = Task.query.filter(Task.status != TASK_DONE)
+    updates = (
+        TaskEvent.query.join(Task, TaskEvent.task_id == Task.id)
+        .filter(TaskEvent.user_id != current_user.id)
+        .filter(or_(Task.assignee_id == current_user.id,
+                    Task.reporter_id == current_user.id))
+    )
+    if current_user.tasks_seen_at:
+        updates = updates.filter(TaskEvent.created_at > current_user.tasks_seen_at)
+    return {
+        "open": open_q.count(),
+        "mine": open_q.filter(Task.assignee_id == current_user.id).count(),
+        "overdue": open_q.filter(Task.due_date.isnot(None),
+                                 Task.due_date < date.today()).count(),
+        "updates": updates.count(),
+    }
+
+
 @tasks_bp.app_context_processor
 def inject_task_counts():
-    """Счётчики для боковой навигации сервиса."""
-    empty = {"open": 0, "mine": 0, "overdue": 0, "updates": 0}
+    """Счётчики для боковой навигации — считаются, только если нужны."""
     if not current_user.is_authenticated:
-        return {"task_counts": empty}
-    try:
-        open_q = Task.query.filter(Task.status != TASK_DONE)
-        seen = current_user.tasks_seen_at
-        updates = (
-            TaskEvent.query.join(Task, TaskEvent.task_id == Task.id)
-            .filter(TaskEvent.user_id != current_user.id)
-            .filter(or_(Task.assignee_id == current_user.id,
-                        Task.reporter_id == current_user.id))
-        )
-        if seen:
-            updates = updates.filter(TaskEvent.created_at > seen)
-        return {
-            "task_counts": {
-                "open": open_q.count(),
-                "mine": open_q.filter(
-                    Task.assignee_id == current_user.id
-                ).count(),
-                "overdue": open_q.filter(
-                    Task.due_date.isnot(None), Task.due_date < date.today()
-                ).count(),
-                "updates": updates.count(),
-            }
-        }
-    except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
-        return {"task_counts": empty}
+        return {"task_counts": LazyCounts(dict, TASK_COUNTS_EMPTY)}
+    return {"task_counts": LazyCounts(_task_counts, TASK_COUNTS_EMPTY)}
 
 
 def _next_number() -> int:

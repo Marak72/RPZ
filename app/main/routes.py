@@ -49,7 +49,7 @@ from ..settings_store import (
     set_setting,
 )
 from ..web_utils import csv_response as _csv_response
-from ..web_utils import operator_required, service_guard
+from ..web_utils import LazyCounts, operator_required, service_guard
 from .forms import (
     AppSettingsForm,
     ManualAddForm,
@@ -69,31 +69,31 @@ HASH_TYPES = ("sha256", "sha1", "md5")
 PER_PAGE = 100
 
 
+NAV_COUNTS_EMPTY = {"domains": 0, "ips": 0, "urls": 0, "hashes": 0,
+                    "blocked": 0, "pending": 0, "documents": 0}
+
+
+def _nav_counts() -> dict:
+    snap = _latest_snapshot()
+    blocked = {e.domain for e in snap.entries} if snap else set()
+    domains = BlockEntry.query.filter_by(entry_type="domain")
+    return {
+        "domains": domains.count(),
+        "ips": BlockEntry.query.filter_by(entry_type="ip").count(),
+        "urls": UrlEntry.query.count(),
+        "hashes": IocHash.query.count(),
+        "blocked": len(blocked),
+        "pending": sum(1 for d in domains.all() if d.value not in blocked),
+        "documents": Document.query.count(),
+    }
+
+
 @main_bp.app_context_processor
 def inject_nav_counts():
-    """Счётчики для боковой навигации. Ошибки БД не должны ломать страницу."""
-    empty = {"domains": 0, "ips": 0, "urls": 0, "hashes": 0,
-             "blocked": 0, "pending": 0, "documents": 0}
+    """Счётчики для боковой навигации — считаются, только если нужны."""
     if not current_user.is_authenticated:
-        return {"nav_counts": empty}
-    try:
-        snap = _latest_snapshot()
-        blocked = {e.domain for e in snap.entries} if snap else set()
-        domains = BlockEntry.query.filter_by(entry_type="domain")
-        return {
-            "nav_counts": {
-                "domains": domains.count(),
-                "ips": BlockEntry.query.filter_by(entry_type="ip").count(),
-                "urls": UrlEntry.query.count(),
-                "hashes": IocHash.query.count(),
-                "blocked": len(blocked),
-                "pending": sum(1 for d in domains.all() if d.value not in blocked),
-                "documents": Document.query.count(),
-            }
-        }
-    except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
-        current_app.logger.exception("Не удалось посчитать навигационные счётчики")
-        return {"nav_counts": empty}
+        return {"nav_counts": LazyCounts(dict, NAV_COUNTS_EMPTY)}
+    return {"nav_counts": LazyCounts(_nav_counts, NAV_COUNTS_EMPTY)}
 
 
 def _latest_snapshot() -> RpzSnapshot | None:

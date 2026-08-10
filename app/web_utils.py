@@ -10,6 +10,39 @@ from flask import Response, abort
 from flask_login import current_user, login_required
 
 
+class LazyCounts:
+    """Счётчики, которые считаются только если шаблон их спросил.
+
+    Навигационные счётчики нужны на страницах своего сервиса, а контекстный
+    процессор выполняется на каждый запрос. Без ленивости открытие любой
+    страницы портала тянуло бы десяток лишних запросов к базе.
+    """
+
+    def __init__(self, loader, empty: dict):
+        self._loader = loader
+        self._empty = empty
+        self._data = None
+
+    def _load(self) -> dict:
+        if self._data is None:
+            try:
+                self._data = self._loader()
+            except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
+                from flask import current_app
+
+                current_app.logger.exception("Не удалось посчитать счётчики")
+                self._data = self._empty
+        return self._data
+
+    def __getitem__(self, key):
+        return self._load().get(key, 0)
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return self._load().get(name, 0)
+
+
 def service_guard(service_id: str):
     """Закрыть blueprint сервиса от тех, кому он не выдан.
 

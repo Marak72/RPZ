@@ -117,18 +117,42 @@
 
   <div class="card">
     <div class="card__header">
-      {{ ico.icon('hash') }}<span class="card__title">Категории</span>
+      {{ ico.icon('hash') }}<span class="card__title">Категории угроз</span>
+      <a class="btn btn--ghost btn--sm" style="margin-left:auto"
+         href="{{ url_for('skydns.categories') }}">Справочник</a>
     </div>
     <div class="card__body card__body--flush">
-      {% if top_categories %}
+      {% if danger_cats %}
       <table class="table">
+        <thead>
+          <tr>
+            <th>Категория</th><th class="num">Запросов</th>
+            <th class="num">Доля</th><th class="num">Доменов</th>
+          </tr>
+        </thead>
         <tbody>
-          {% for cat, cnt in top_categories %}
+          {% for cat in danger_cats %}
           <tr>
             <td>
-              <a href="{{ url_for('skydns.domains', category=cat) }}">{{ cat or 'без категории' }}</a>
+              <a href="{{ url_for('skydns.domains', category=cat.id) }}">
+                {{ cat.title or cat.id }}</a>
+              {% if not cat.is_tracked %}
+              <span class="badge badge--neutral">не отслеживается</span>
+              {% endif %}
             </td>
-            <td class="num nowrap"><span class="badge badge--neutral">{{ cnt }}</span></td>
+            <td class="num">{{ '{:,}'.format(cat.requests).replace(',', ' ') }}</td>
+            <td class="num">
+              {% set share = (cat.requests * 100 / danger_total) if danger_total else 0 %}
+              <div class="share">
+                <span class="share__value">{{ '%.1f'|format(share) }}%</span>
+                <span class="share__bar"><i style="width: {{ share }}%"></i></span>
+              </div>
+            </td>
+            <td class="num">
+              {% if cat.domains_count %}
+              <span class="badge badge--danger">{{ cat.domains_count }}</span>
+              {% else %}—{% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -136,7 +160,9 @@
       {% else %}
       <div class="empty">
         {{ ico.icon('hash') }}
-        <div class="empty__title">Данных пока нет</div>
+        <div class="empty__title">Справочник ещё не загружен</div>
+        <div class="empty__text">Категории приходят вместе с первой выгрузкой
+          статистики из SkyDNS.</div>
       </div>
       {% endif %}
     </div>

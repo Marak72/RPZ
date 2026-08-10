@@ -46,7 +46,7 @@ DEFAULT_SIEM_FILTER = 'datafield1 = "{domain}" or datafield3 = "{domain}"'
 DEFAULT_SIEM_GROUP_FIELD = "dst.host"
 
 DEFAULT_SKYDNS_TZ = "Asia/Yekaterinburg"
-DEFAULT_SKYDNS_LIMIT = 500
+DEFAULT_SKYDNS_LIMIT = 2000
 
 
 def get_setting(key: str, default: str = "") -> str:
