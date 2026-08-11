@@ -83,9 +83,9 @@ class SiemSettingsForm(FlaskForm):
         "Окно поиска, часов",
         validators=[Optional(), NumberRange(min=1, max=24 * 365)],
     )
-    limit = IntegerField(
-        "Максимум строк в ответе",
-        validators=[Optional(), NumberRange(min=10, max=10000)],
+    max_events = IntegerField(
+        "Максимум событий на домен",
+        validators=[Optional(), NumberRange(min=100, max=500000)],
     )
     timeout = IntegerField(
         "Таймаут запроса, секунд",

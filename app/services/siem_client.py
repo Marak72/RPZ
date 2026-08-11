@@ -124,6 +124,10 @@ TAXONOMY_FIELDS = (
     "tenant_id", "text", "time", "type", "uuid"
 )
 
+#: Сколько событий просить за один запрос. Больше тысячи SIEM отдаёт неохотно,
+#: а страницами дочитывается сколько нужно.
+PAGE_SIZE = 1000
+
 USER_AGENT = "rpz-portal/1.0"
 
 
@@ -150,7 +154,9 @@ class SiemConfig:
     # Сгруппированный запрос за несколько суток SIEM считает не мгновенно,
     # поэтому 30 секунд по умолчанию было мало: обрывалось на полпути.
     timeout: int = 120
-    limit: int = 500
+    # Предел событий на домен: защита от имени, по которому в SIEM
+    # миллион записей. Страницами дочитывается всё до этого предела.
+    limit: int = 20000
 
     @property
     def is_configured(self) -> bool:
@@ -173,8 +179,10 @@ class SearchResult:
     hosts: list[HostHit] = field(default_factory=list)
     total_count: int = 0
     query_filter: str = ""
-    #: Ответ упёрся в limit — значит, часть хостов осталась за кадром.
+    #: Дочитать до конца не удалось — часть хостов осталась за кадром.
     truncated: bool = False
+    #: Сколько событий фактически прочитано (может быть меньше total_count).
+    events_read: int = 0
 
 
 def _normalize_base(base_url: str) -> str:
@@ -404,12 +412,16 @@ class SiemClient:
 
     # --- поиск ------------------------------------------------------------
 
-    def _events(self, body: dict, limit: int) -> dict:
-        """Отправить сгруппированный запрос и вернуть разобранный ответ."""
+    def _events(self, body: dict, limit: int, offset: int = 0,
+                token: str = "") -> dict:
+        """Отправить запрос событий и вернуть разобранный ответ."""
+        params = {"limit": limit, "offset": offset}
+        if token:
+            # Токен выдаётся первой страницей и закрепляет выборку: без него
+            # следующие страницы считались бы по изменившемуся набору событий.
+            params["token"] = token
         url = _api_url(
-            self.config.base_url,
-            PATH_EVENTS,
-            urllib.parse.urlencode({"limit": limit, "offset": 0}),
+            self.config.base_url, PATH_EVENTS, urllib.parse.urlencode(params)
         )
         try:
             response = self._request(
@@ -451,29 +463,59 @@ class SiemClient:
 
         fields = _group_fields(group_field)
         query_filter = _render_filter(filter_template, domain)
-        limit = limit or self.config.limit
-        payload = self._events(
-            _build_group_query(
-                query_filter=query_filter,
-                group_field=fields,
-                time_from=time_from,
-                time_to=time_to,
-                select=_select_for(fields),
-                # Группировку не просим намеренно, см. _build_group_query.
-                group_by=[],
-            ),
-            limit,
+        cap = limit or self.config.limit
+        body = _build_group_query(
+            query_filter=query_filter,
+            group_field=fields,
+            time_from=time_from,
+            time_to=time_to,
+            select=_select_for(fields),
+            # Группировку не просим намеренно, см. _build_group_query.
+            group_by=[],
         )
 
-        hosts = _parse_group_rows(payload, fields)
+        rows, total, truncated = self._read_all_events(body, cap)
         return SearchResult(
-            hosts=hosts,
-            total_count=int(payload.get("totalCount") or 0),
+            hosts=_parse_group_rows({"events": rows}, fields),
+            total_count=total,
             query_filter=query_filter,
-            # Постраничного дочитывания нет: если строк ровно limit, значит
-            # SIEM отдал не всё, и оператор должен об этом узнать.
-            truncated=len(_response_rows(payload)) >= limit,
+            truncated=truncated,
+            events_read=len(rows),
         )
+
+    def _read_all_events(self, body: dict, cap: int) -> tuple[list, int, bool]:
+        """Вычитать события страницами, пока не кончатся или не упрёмся в предел.
+
+        За один ответ SIEM отдаёт ограниченное число строк, а хостов в
+        организации может быть куда больше, чем помещается в одну страницу:
+        адреса рабочих станций распределены по выборке неравномерно, и первая
+        тысяча событий запросто окажется трафиком одного шумного узла.
+        Поэтому страницы дочитываются до ``totalCount``.
+
+        Предел ``cap`` — защита от домена, по которому в SIEM миллион
+        событий: лучше честно сказать, что взяли не всё, чем висеть час.
+        """
+        collected: list = []
+        total = 0
+        token = ""
+        page = dict(body)
+
+        while len(collected) < cap:
+            size = min(PAGE_SIZE, cap - len(collected))
+            payload = self._events(page, size, offset=len(collected), token=token)
+            rows = _response_rows(payload)
+            total = int(payload.get("totalCount") or total)
+            token = str(payload.get("token") or token)
+            collected.extend(rows)
+
+            if not rows or len(collected) >= total:
+                break
+            # Со второй страницы выборку закрепляем токеном, а верхнюю
+            # границу периода снимаем: события, приехавшие уже во время
+            # чтения, иначе сдвигали бы нумерацию страниц.
+            page = dict(body, timeTo=None)
+
+        return collected, total, len(collected) < total
 
     def probe(
         self,

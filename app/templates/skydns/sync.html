@@ -34,7 +34,25 @@
             {{ sync_form.end() }}
           </div>
         </div>
-        {{ sync_form.submit_sync(class="btn btn--primary", disabled=(not skydns_configured)) }}
+        <div class="btn-group">
+          {{ sync_form.submit_sync(class="btn btn--primary", disabled=(not skydns_configured)) }}
+          {# Полный сбор режет запрос на срезы «категория × сутки»: лимит API
+             применяется к каждому срезу, поэтому за прогон забирается в
+             десятки раз больше имён. Платим временем — отсюда и оценка. #}
+          <button name="deep" value="1" class="btn"
+                  {% if not skydns_configured %}disabled{% endif %}>
+            {{ ico.icon('download') }} Собрать всё
+          </button>
+        </div>
+        <div class="help">
+          <b>Забрать из SkyDNS</b> — один отчёт по всем отслеживаемым
+          категориям: быстро, но API отдаёт только вершину списка.<br>
+          <b>Собрать всё</b> — отдельный отчёт на каждую категорию и каждые
+          сутки периода: лимит применяется к срезу, а не ко всей выборке,
+          поэтому доменов набирается кратно больше. Это
+          {{ tracked_count }} × число суток отчётов, идёт в фоне —
+          страницу можно закрыть.
+        </div>
         {% if not skydns_configured %}
         <div class="help">Укажите ID пользователя и токен API в
           <a href="{{ url_for('skydns.settings') }}">настройках сервиса</a>.</div>

@@ -38,7 +38,11 @@ KEY_SIEM_VERIFY = "siem_verify_ssl"
 KEY_SIEM_FILTER = "siem_filter_template"         # шаблон фильтра с {domain}
 KEY_SIEM_GROUP_FIELD = "siem_group_field"        # поле группировки
 KEY_SIEM_WINDOW = "siem_window_hours"            # окно поиска, часов
-KEY_SIEM_LIMIT = "siem_limit"                    # максимум строк ответа
+# Предел событий на один домен. Ключ новый: раньше настройка ограничивала
+# число строк в одном ответе, теперь — сколько событий всего дочитывать
+# страницами. Старое значение (обычно 500) под новым смыслом означало бы
+# «взять только первые 500 событий» — незаметное урезание выборки.
+KEY_SIEM_MAX_EVENTS = "siem_max_events"
 KEY_SIEM_TIMEOUT = "siem_timeout"                # таймаут запроса, секунд
 
 # Фильтр из рабочей практики: домен в SkyDNS-событиях попадает в datafield1
@@ -49,6 +53,7 @@ DEFAULT_SIEM_FILTER = 'datafield1 = "{domain}" or datafield3 = "{domain}"'
 # заполненного (в событиях разных источников он лежит по-разному).
 DEFAULT_SIEM_GROUP_FIELD = "src.ip"
 DEFAULT_SIEM_TIMEOUT = 120
+DEFAULT_SIEM_MAX_EVENTS = 20000
 
 DEFAULT_SKYDNS_TZ = "Asia/Yekaterinburg"
 DEFAULT_SKYDNS_LIMIT = 2000
@@ -132,7 +137,7 @@ def load_siem_config():
         client_id=get_setting(KEY_SIEM_CLIENT_ID, DEFAULT_CLIENT_ID),
         client_secret=get_setting(KEY_SIEM_CLIENT_SECRET),
         verify_ssl=get_bool(KEY_SIEM_VERIFY, False),
-        limit=get_int(KEY_SIEM_LIMIT, 500),
+        limit=get_int(KEY_SIEM_MAX_EVENTS, DEFAULT_SIEM_MAX_EVENTS),
         timeout=get_int(KEY_SIEM_TIMEOUT, DEFAULT_SIEM_TIMEOUT),
     )
 

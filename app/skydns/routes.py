@@ -33,6 +33,7 @@ from ..models import (
     HOST_SOURCE_SKYDNS,
     JOB_FAILED,
     JOB_KIND_SIEM,
+    JOB_KIND_SKYDNS,
     JOB_SUCCESS,
     STATUS_NEW,
     THREAT_BLOCKED,
@@ -48,13 +49,17 @@ from ..models import (
     ThreatDomain,
     ThreatHost,
 )
+from ..services import domains as dm
 from ..services import skydns_client
-from ..services.jobs import JobError, active_job, start
+from ..services.exclusions import Matcher
+from ..services.jobs import JobError, active_job
+from ..services.jobs import start as start_job
 from ..services.siem_client import SiemClient, SiemError
 from ..services.skydns_client import SkydnsClient, SkydnsError
 from ..settings_store import (
     DEFAULT_SIEM_FILTER,
     DEFAULT_SIEM_GROUP_FIELD,
+    DEFAULT_SIEM_MAX_EVENTS,
     DEFAULT_SIEM_TIMEOUT,
     DEFAULT_SKYDNS_LIMIT,
     DEFAULT_SKYDNS_TZ,
@@ -64,7 +69,7 @@ from ..settings_store import (
     KEY_SIEM_CLIENT_SECRET,
     KEY_SIEM_FILTER,
     KEY_SIEM_GROUP_FIELD,
-    KEY_SIEM_LIMIT,
+    KEY_SIEM_MAX_EVENTS,
     KEY_SIEM_PASSWORD,
     KEY_SIEM_TIMEOUT,
     KEY_SIEM_URL,
@@ -488,16 +493,16 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
                 log.events_total = result.total_count
                 log.query_filter = result.query_filter
                 log.message = (
-                    f"Найдено хостов: {len(result.hosts)}; "
-                    f"событий: {result.total_count}."
+                    f"Найдено хостов: {len(result.hosts)}; событий прочитано: "
+                    f"{result.events_read} из {result.total_count}."
                 )
                 if result.truncated:
                     # Постранично ответ не дочитывается, поэтому молчать об
                     # этом нельзя: часть хостов могла не попасть в выборку.
                     log.message += (
-                        f" Ответ упёрся в предел {config.limit} событий — "
-                        "часть хостов могла не войти; сузьте окно поиска "
-                        "или увеличьте предел в настройках."
+                        f" Дочитано не всё: предел {config.limit} событий "
+                        "на домен. Часть хостов могла не войти — сузьте окно "
+                        "поиска или поднимите предел в настройках."
                     )
                     truncated_for.append(threat.domain)
                 done += 1
@@ -544,7 +549,7 @@ def _start_lookup(threats: list[ThreatDomain], back_url: str):
     if len(threats) > 3:
         domains += f" и ещё {len(threats) - 3}"
 
-    start(
+    start_job(
         current_app._get_current_object(),
         kind=JOB_KIND_SIEM,
         service_id="skydns",
@@ -724,20 +729,30 @@ def _recount_categories() -> None:
     db.session.commit()
 
 
-def _upsert_stats(stats, source: str, tracked: set | None = None) -> tuple:
+def _upsert_stats(stats, source: str, tracked: set | None = None,
+                  user_id: int | None = None) -> tuple:
     """Сохранить статистику по доменам.
 
     ``tracked`` — множество ID отслеживаемых категорий. Если оно задано,
     домен без пересечения с ним пропускается (API уже фильтрует по ``cats``,
     но отчёт может содержать и смежные категории домена).
+
+    Возвращает ``(сохранено, новых, отсеяно правилами)``.
     """
     catalogue = _catalogue()
+    matcher = Matcher()
     now = datetime.utcnow()
-    total = new = 0
+    if user_id is None:
+        # В фоновом задании контекста запроса нет — автора передают явно.
+        user_id = current_user.id if current_user.is_authenticated else None
+    total = new = skipped = 0
 
     for stat in stats:
         cat_ids = [int(c) for c in (stat.cat_ids or [])]
         if tracked is not None and cat_ids and not (set(cat_ids) & tracked):
+            continue
+        if matcher.excluded(stat.domain):
+            skipped += 1
             continue
 
         primary, titles = skydns_client.describe_categories(cat_ids, catalogue)
@@ -746,9 +761,10 @@ def _upsert_stats(stats, source: str, tracked: set | None = None) -> tuple:
         if threat is None:
             threat = ThreatDomain(
                 domain=stat.domain,
+                root_domain=dm.registrable(stat.domain),
                 first_seen=now,
                 source=source,
-                added_by=current_user.id,
+                added_by=user_id,
                 # Значения по умолчанию проставляются только при вставке,
                 # а счётчики нужны прямо сейчас — ниже идёт сравнение.
                 requests_count=0,
@@ -757,17 +773,33 @@ def _upsert_stats(stats, source: str, tracked: set | None = None) -> tuple:
             db.session.add(threat)
             new += 1
         threat.last_seen = now
+        if not threat.root_domain:
+            threat.root_domain = dm.registrable(threat.domain)
         # Счётчики приходят за период выборки — берём максимум, а не затираем.
         threat.requests_count = max(threat.requests_count or 0, stat.requests)
         threat.blocks_count = max(threat.blocks_count or 0, stat.blocks)
         if cat_ids:
-            threat.cat_ids = ",".join(str(c) for c in cat_ids)
+            threat.cat_ids = _merge_cat_ids(threat.cat_ids, cat_ids)
         # Категория из CSV/ручного ввода приходит строкой, из API — списком id.
         threat.category = primary or stat.category or threat.category
         threat.category_title = titles or stat.category_title or threat.category_title
 
+    matcher.save_hits()
     db.session.commit()
-    return total, new
+    return total, new, skipped
+
+
+def _merge_cat_ids(stored: str, incoming: list) -> str:
+    """Объединить категории домена, а не заменять их.
+
+    При сборе по срезам один и тот же домен приезжает из нескольких запросов
+    (по одному на категорию), и каждый ответ знает только про свою. Затирая
+    список, мы бы оставили домену последнюю увиденную категорию.
+    """
+    known = {int(part) for part in (stored or "").split(",")
+             if part.strip().lstrip("-").isdigit()}
+    known.update(int(c) for c in incoming)
+    return ",".join(str(c) for c in sorted(known))
 
 
 def _apply_devices(threat: ThreatDomain, devices) -> tuple:
@@ -847,87 +879,177 @@ def sync():
 
 
 def _do_api_sync(form):
+    """Запустить выгрузку из SkyDNS фоновым заданием."""
     start = form.start.data or date.today() - timedelta(days=DEFAULT_SYNC_DAYS)
     end = form.end.data or date.today()
     if start > end:
         flash("Начало периода позже его конца.", "danger")
         return redirect(url_for("skydns.sync"))
 
-    log = SkydnsSyncLog(
-        source=THREAT_SOURCE_API,
-        period_from=start,
-        period_to=end,
+    running = active_job(JOB_KIND_SKYDNS)
+    if running is not None:
+        flash("Выгрузка из SkyDNS уже идёт — дождитесь её окончания.", "warning")
+        return redirect(url_for("skydns.sync"))
+
+    deep = bool(request.form.get("deep"))
+    days = (end - start).days + 1
+    tracked = _tracked_ids()
+    # Полный сбор идёт срезами «категория × день»: столько отчётов и будет.
+    steps = (len(tracked) * days) if deep else 1
+
+    start_job(
+        current_app._get_current_object(),
+        kind=JOB_KIND_SKYDNS,
+        service_id="skydns",
+        title=("Полная выгрузка из SkyDNS" if deep else "Выгрузка из SkyDNS")
+              + f": {start:%d.%m} — {end:%d.%m}",
+        total=steps + 2,          # +справочник категорий, +устройства
         user_id=current_user.id,
+        target_url=url_for("skydns.domains"),
+        worker=_sync_worker(start, end, current_user.id, deep=deep),
     )
-    db.session.add(log)
-
-    client = SkydnsClient(load_skydns_config())
-    try:
-        # 1. Справочник категорий: SkyDNS сам помечает опасные.
-        dangerous = _sync_categories(client, start, end)
-        tracked = _tracked_ids()
-        if not tracked:
-            raise SkydnsError(
-                "Ни одна категория не отмечена как отслеживаемая — "
-                "проверьте справочник категорий."
-            )
-        # 2. Домены только отслеживаемых категорий.
-        stats = client.domains(
-            start, end, cats=tracked,
-            limit=get_int(KEY_SKYDNS_LIMIT, DEFAULT_SKYDNS_LIMIT),
-        )
-    except SkydnsError as exc:
-        log.status = JOB_FAILED
-        log.finished_at = datetime.utcnow()
-        log.message = str(exc)
-        db.session.commit()
-        flash(str(exc), "danger")
-        return redirect(url_for("skydns.sync"))
-    except Exception as exc:  # noqa: BLE001
-        current_app.logger.exception("Ошибка выгрузки из SkyDNS")
-        log.status = JOB_FAILED
-        log.finished_at = datetime.utcnow()
-        log.message = f"Непредвиденная ошибка: {exc}"
-        db.session.commit()
-        flash(f"Непредвиденная ошибка выгрузки: {exc}", "danger")
-        return redirect(url_for("skydns.sync"))
-
-    total, new = _upsert_stats(stats, THREAT_SOURCE_API, tracked=set(tracked))
-    _recount_categories()
-
-    # 3. Устройства: часть конечных хостов SkyDNS знает сам, без SIEM.
-    devices_found = 0
-    if get_bool(KEY_SKYDNS_AUTO_DEVICES, True) and total:
-        devices_found = _collect_devices(client, start, end, tracked)
-
-    log.status = JOB_SUCCESS
-    log.finished_at = datetime.utcnow()
-    log.domains_total = total
-    log.domains_new = new
-    limit = get_int(KEY_SKYDNS_LIMIT, DEFAULT_SKYDNS_LIMIT)
-    hit_limit = len(stats) >= limit
-    log.message = (
-        f"Опасных категорий в справочнике: {dangerous}; отслеживается: "
-        f"{len(tracked)}. Доменов в ответе: {len(stats)}; сохранено: {total}; "
-        f"новых: {new}; хостов от SkyDNS: {devices_found}."
-        + (f" Выборка упёрлась в лимит {limit}." if hit_limit else "")
-    )
-    db.session.commit()
     flash(
-        f"Из SkyDNS получено доменов: {len(stats)}. Сохранено: {total}, "
-        f"из них новых: {new}. Хостов найдено сразу: {devices_found}.",
-        "success",
+        "Выгрузка запущена в фоне. Можно продолжать работу — о результате "
+        "портал сообщит сам.",
+        "info",
     )
-    if hit_limit:
-        # Молча потерять часть доменов хуже, чем показать длинное сообщение.
-        flash(
-            f"Выборка упёрлась в лимит {limit} доменов — за период их больше. "
-            "Домены отсортированы по числу обращений, поэтому самое заметное "
-            "уже загружено. Чтобы забрать остальное, поднимите лимит в "
-            "настройках или загрузите период по дням.",
-            "warning",
+    return redirect(url_for("skydns.sync"))
+
+
+def _day_range(start: date, end: date):
+    day = start
+    while day <= end:
+        yield day
+        day += timedelta(days=1)
+
+
+def _sync_worker(start: date, end: date, user_id: int, deep: bool):
+    """Исполнитель выгрузки из SkyDNS.
+
+    Обычный режим — один отчёт по всем отслеживаемым категориям за период:
+    быстро, но API отдаёт только вершину списка, и всё, что не поместилось
+    в лимит, теряется молча.
+
+    Полный сбор режет запрос на срезы «одна категория × одни сутки». Лимит
+    применяется к каждому срезу отдельно, поэтому за один прогон забирается
+    в десятки раз больше имён: девять категорий за неделю — это 63 отчёта
+    по столько-то доменов вместо одного общего. Срез, который всё-таки упёрся
+    в лимит, попадает в итог поимённо — значит, там ещё есть что забрать.
+    """
+
+    def work(handle):
+        client = SkydnsClient(load_skydns_config())
+        log = SkydnsSyncLog(
+            source=THREAT_SOURCE_API, period_from=start, period_to=end,
+            user_id=user_id,
         )
-    return redirect(url_for("skydns.domains"))
+        db.session.add(log)
+        db.session.commit()
+
+        limit = get_int(KEY_SKYDNS_LIMIT, DEFAULT_SKYDNS_LIMIT)
+        done = 0
+
+        try:
+            handle.progress(processed=0, detail="Справочник категорий")
+            dangerous = _sync_categories(client, start, end)
+            tracked = _tracked_ids()
+            if not tracked:
+                raise SkydnsError(
+                    "Ни одна категория не отмечена как отслеживаемая — "
+                    "проверьте справочник категорий."
+                )
+            done = 1
+            handle.progress(processed=done)
+
+            merged: dict = {}
+            full_slices: list[str] = []
+            titles = {c.id: c.title for c in SkydnsCategory.query.all()}
+
+            for cats, day_from, day_to, label in _slices(tracked, start, end,
+                                                         deep, titles):
+                handle.progress(processed=done, detail=f"Домены: {label}")
+                chunk = client.domains(day_from, day_to, cats=cats, limit=limit)
+                for stat in chunk:
+                    _merge_stat(merged, stat)
+                if len(chunk) >= limit:
+                    full_slices.append(label)
+                done += 1
+                handle.progress(processed=done, found=len(merged))
+        finally:
+            db.session.commit()
+
+        stats = list(merged.values())
+        total, new, skipped = _upsert_stats(
+            stats, THREAT_SOURCE_API, tracked=set(tracked), user_id=user_id,
+        )
+        _recount_categories()
+
+        handle.progress(processed=done + 1, detail="Устройства SkyDNS",
+                        found=total)
+        devices_found = 0
+        if get_bool(KEY_SKYDNS_AUTO_DEVICES, True) and total:
+            devices_found = _collect_devices(client, start, end, tracked)
+
+        summary = (
+            f"Отслеживаемых категорий: {len(tracked)} (опасных в справочнике: "
+            f"{dangerous}). Уникальных доменов в ответах: {len(stats)}; "
+            f"сохранено: {total}; новых: {new}; "
+            f"хостов от SkyDNS: {devices_found}."
+        )
+        if skipped:
+            summary += f" Отсеяно правилами исключений: {skipped}."
+        if full_slices:
+            # Срез, упёршийся в лимит, — единственный признак того, что за
+            # период осталось что-то незабранное. Молчать о нём нельзя.
+            summary += (
+                f" Упёрлись в лимит {limit} срезов: {len(full_slices)} "
+                f"({', '.join(full_slices[:4])}) — поднимите лимит доменов "
+                "в настройках или сузьте период."
+            )
+        elif not deep:
+            summary += (" Это быстрая выгрузка: забрана вершина списка. "
+                        "Полный сбор — кнопка «Собрать всё».")
+
+        log.status = JOB_SUCCESS
+        log.finished_at = datetime.utcnow()
+        log.domains_total = total
+        log.domains_new = new
+        log.message = summary
+        db.session.commit()
+        return summary
+
+    return work
+
+
+def _slices(tracked: list, start: date, end: date, deep: bool, titles: dict):
+    """Из чего складывается выгрузка: список запросов к API.
+
+    Отдаёт кортежи ``(категории, начало, конец, подпись)``.
+    """
+    if not deep:
+        yield list(tracked), start, end, "все категории за период"
+        return
+    for cat in tracked:
+        name = titles.get(cat) or f"категория {cat}"
+        for day in _day_range(start, end):
+            yield [cat], day, day, f"{name} · {day:%d.%m}"
+
+
+def _merge_stat(merged: dict, stat) -> None:
+    """Свести одинаковые домены из разных срезов в одну запись.
+
+    Счётчики складываются (срезы не пересекаются по дням), категории
+    объединяются: каждый срез знает только про свою.
+    """
+    known = merged.get(stat.domain)
+    if known is None:
+        merged[stat.domain] = stat
+        return
+    known.requests += stat.requests
+    known.blocks += stat.blocks
+    for cat in stat.cat_ids:
+        if cat not in known.cat_ids:
+            known.cat_ids.append(cat)
 
 
 def _collect_devices(client, start: date, end: date, tracked: list) -> int:
@@ -980,18 +1102,20 @@ def _do_csv_import(form):
         flash(str(exc), "danger")
         return redirect(url_for("skydns.sync"))
 
-    total, new = _upsert_stats(stats, THREAT_SOURCE_CSV)
+    total, new, skipped = _upsert_stats(stats, THREAT_SOURCE_CSV)
     log.status = JOB_SUCCESS
     log.finished_at = datetime.utcnow()
     log.domains_total = total
     log.domains_new = new
     log.message = (
         f"Строк в файле: {len(stats)}; сохранено: {total}; новых: {new}."
+        + (f" Отсеяно правилами: {skipped}." if skipped else "")
     )
     db.session.commit()
     flash(
         f"Из файла разобрано строк: {len(stats)}. "
-        f"Сохранено доменов: {total}, из них новых: {new}.",
+        f"Сохранено доменов: {total}, из них новых: {new}."
+        + (f" Отсеяно правилами исключений: {skipped}." if skipped else ""),
         "success",
     )
     return redirect(url_for("skydns.domains"))
@@ -1013,7 +1137,15 @@ def _do_manual_add(form):
         flash("Не найдено ни одного корректного домена.", "danger")
         return redirect(url_for("skydns.sync"))
 
-    total, new = _upsert_stats(stats, THREAT_SOURCE_MANUAL)
+    total, new, skipped = _upsert_stats(stats, THREAT_SOURCE_MANUAL)
+    if skipped:
+        # Молча не добавить домен, который оператор ввёл руками, — худшее,
+        # что можно сделать: он решит, что портал сломан.
+        flash(
+            f"Не добавлено из-за правил исключений: {skipped}. "
+            "Правила — в разделе «Исключения».",
+            "warning",
+        )
     flash(f"Добавлено доменов: {total}, из них новых: {new}.", "success")
     return redirect(url_for("skydns.domains"))
 
@@ -1115,7 +1247,7 @@ def _siem_form() -> SiemSettingsForm:
         filter_template=get_setting(KEY_SIEM_FILTER, DEFAULT_SIEM_FILTER),
         group_field=get_setting(KEY_SIEM_GROUP_FIELD, DEFAULT_SIEM_GROUP_FIELD),
         window_hours=get_int(KEY_SIEM_WINDOW, DEFAULT_WINDOW_HOURS),
-        limit=get_int(KEY_SIEM_LIMIT, 500),
+        max_events=get_int(KEY_SIEM_MAX_EVENTS, DEFAULT_SIEM_MAX_EVENTS),
         timeout=get_int(KEY_SIEM_TIMEOUT, DEFAULT_SIEM_TIMEOUT),
     )
 
@@ -1192,8 +1324,8 @@ def _save_siem(form) -> None:
                 (form.group_field.data or DEFAULT_SIEM_GROUP_FIELD).strip())
     if form.window_hours.data:
         set_setting(KEY_SIEM_WINDOW, str(form.window_hours.data))
-    if form.limit.data:
-        set_setting(KEY_SIEM_LIMIT, str(form.limit.data))
+    if form.max_events.data:
+        set_setting(KEY_SIEM_MAX_EVENTS, str(form.max_events.data))
     if form.timeout.data:
         set_setting(KEY_SIEM_TIMEOUT, str(form.timeout.data))
     # Секреты перезаписываются, только если их ввели заново.

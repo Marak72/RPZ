@@ -440,6 +440,7 @@ def test_dashboard_shows_threat_categories(client, monkeypatch):
 
 def test_hitting_the_limit_is_reported(client, monkeypatch):
     """Упор в лимит нельзя проглатывать: часть доменов осталась в SkyDNS."""
+    from app.models import BackgroundJob
     from app.services.skydns_client import Category, DomainStat
 
     fake = _fake_skydns(
@@ -447,10 +448,10 @@ def test_hitting_the_limit_is_reported(client, monkeypatch):
         [Category(3, "Malware", True)],
         [DomainStat(f"evil{i}.ru", requests=i, cat_ids=[3]) for i in range(2000)],
     )
-    body = _sync(client).get_data(as_text=True)
+    _sync(client)
 
     assert fake.limit == 2000
-    assert "упёрлась в лимит" in body
+    assert "Упёрлись в лимит" in BackgroundJob.query.one().message
 
 
 def test_no_limit_warning_when_everything_fits(client, monkeypatch):

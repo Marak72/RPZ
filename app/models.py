@@ -461,6 +461,10 @@ class ThreatDomain(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     domain = db.Column(db.String(500), unique=True, nullable=False, index=True)
+    # Корневой (регистрируемый) домен: si21if1u2.afd.footprintdns.com ->
+    # footprintdns.com. Хранится рядом, а не считается на лету, чтобы по нему
+    # работали свёрнутый список, фильтр и группировка средствами БД.
+    root_domain = db.Column(db.String(300), nullable=False, default="", index=True)
     # Основная (первая опасная) категория SkyDNS и читаемые названия всех.
     category = db.Column(db.String(120), nullable=False, default="", index=True)
     category_title = db.Column(db.String(200), nullable=False, default="")
@@ -497,6 +501,19 @@ class ThreatDomain(db.Model):
     def vt(self):
         """Отчёт VirusTotal для этого домена (общий с сервисом ФСТЭК)."""
         return VtReport.query.filter_by(value=self.domain).first()
+
+    @property
+    def subdomain(self) -> str:
+        """Часть имени слева от корня — то, чем отличаются однотипные имена."""
+        from .services.domains import subdomain_part
+
+        return subdomain_part(self.domain)
+
+    @property
+    def cat_id_list(self) -> list:
+        """Категории домена числами: в базе они лежат строкой через запятую."""
+        return [int(part) for part in (self.cat_ids or "").split(",")
+                if part.strip().lstrip("-").isdigit()]
 
     @property
     def block_entry(self):
@@ -931,3 +948,39 @@ class BackgroundJob(db.Model):
 
     def __repr__(self) -> str:
         return f"<BackgroundJob {self.kind} {self.status} {self.processed}/{self.total}>"
+
+
+class DomainExclusion(db.Model):
+    """Правило «этот домен вредоносным не считать».
+
+    Категории SkyDNS срабатывают и на служебном трафике: телеметрия,
+    обновления, CDN-имена вида ``si21if1u2.afd.footprintdns.com``. Разбирать
+    их заново на каждой выгрузке — потерянное время, а удалять поштучно
+    бессмысленно: завтра приедет ещё сотня таких же имён.
+
+    Поэтому исключение — это правило, а не отметка на записи. Оно работает
+    и вперёд (домен не попадает в список при выгрузке), и назад (уже
+    загруженные совпавшие домены убираются при сохранении правила).
+    """
+
+    __tablename__ = "domain_exclusions"
+
+    id = db.Column(db.Integer, primary_key=True)
+    # Либо точное имя, либо *.example.com — домен со всеми поддоменами.
+    pattern = db.Column(db.String(300), unique=True, nullable=False, index=True)
+    reason = db.Column(db.String(500), nullable=False, default="")
+    # Сколько записей убрало правило при создании — видно, что оно не зря.
+    removed_count = db.Column(db.Integer, nullable=False, default=0)
+    # Сколько раз правило отсеяло домен на последующих выгрузках.
+    hits_count = db.Column(db.Integer, nullable=False, default=0)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    author = db.relationship("User")
+
+    @property
+    def is_wildcard(self) -> bool:
+        return self.pattern.startswith("*.")
+
+    def __repr__(self) -> str:
+        return f"<DomainExclusion {self.pattern}>"

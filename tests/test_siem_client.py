@@ -294,17 +294,19 @@ def test_search_asks_for_the_other_address_fields_too(monkeypatch):
     assert len(select) < 40
 
 
-def test_search_reports_truncation_at_the_limit(monkeypatch):
-    """Ответ ровно в предел — признак, что SIEM отдал не всё."""
+def test_search_reports_truncation_when_the_cap_stops_it(monkeypatch):
+    """Событий больше, чем разрешено прочитать — часть хостов не увидим."""
     rows = [{"dst.host": f"10.0.0.{i}", "count": 1} for i in range(10)]
-    result, _ = _search(monkeypatch, {"totalCount": 10, "events": rows}, limit=10)
+    result, _ = _search(monkeypatch, {"totalCount": 4000, "events": rows}, limit=10)
     assert result.truncated is True
+    assert result.events_read == 10
 
 
-def test_search_does_not_cry_truncation_below_the_limit(monkeypatch):
+def test_search_does_not_cry_truncation_when_everything_is_read(monkeypatch):
     rows = [{"dst.host": "10.0.0.1", "count": 1}]
     result, _ = _search(monkeypatch, {"totalCount": 1, "events": rows}, limit=10)
     assert result.truncated is False
+    assert result.events_read == 1
 
 
 def test_session_login_sends_credentials_as_json(monkeypatch):
@@ -533,3 +535,88 @@ def test_address_kind_recognises_private_and_public():
     assert siem_client._address_kind("192.168.1.1") == "внутренний адрес"
     assert siem_client._address_kind("109.233.224.100") == "внешний адрес"
     assert siem_client._address_kind("wks-buh-07") == "имя узла"
+
+
+# --- дочитывание событий страницами ---------------------------------------
+
+def _paged_client(total: int, cap: int = 20000):
+    """Клиент с подставным SIEM, который честно отдаёт страницы."""
+    config = siem_client.SiemConfig(
+        base_url="https://siem.local", username="op", password="p", limit=cap,
+    )
+    client = siem_client.SiemClient(config)
+    calls = []
+
+    def fake_open(request, timeout=None):
+        from urllib.parse import parse_qs, urlsplit
+
+        params = parse_qs(urlsplit(request.full_url).query)
+        offset = int(params["offset"][0])
+        size = int(params["limit"][0])
+        calls.append({
+            "offset": offset, "limit": size,
+            "token": (params.get("token") or [""])[0],
+            "body": json.loads(request.data.decode()),
+        })
+        rows = [{"src.ip": f"10.0.{(offset + i) // 250}.{(offset + i) % 250}"}
+                for i in range(max(0, min(size, total - offset)))]
+        return _FakeResponse(json.dumps(
+            {"totalCount": total, "token": "tk-1", "events": rows}
+        ))
+
+    monkeypatch_open(client, fake_open)
+    return client, calls
+
+
+def monkeypatch_open(client, fake_open):
+    client._opener.open = fake_open
+
+
+def _run_search(client):
+    return client.search_hosts(
+        "obltub.ru", TIME_FROM, TIME_TO,
+        'datafield1 = "{domain}"', "src.ip",
+    )
+
+
+def test_events_are_read_page_by_page_until_the_end():
+    """Одной страницы мало: хосты распределены по выборке неравномерно."""
+    client, calls = _paged_client(total=2300)
+    result = _run_search(client)
+
+    assert [c["offset"] for c in calls] == [0, 1000, 2000]
+    assert result.events_read == 2300
+    assert result.truncated is False
+    assert len(result.hosts) == 2300
+
+
+def test_pages_after_the_first_carry_the_token():
+    """Токен закрепляет выборку, иначе страницы поедут при новых событиях."""
+    client, calls = _paged_client(total=1500)
+    _run_search(client)
+    assert calls[0]["token"] == ""
+    assert calls[1]["token"] == "tk-1"
+
+
+def test_pages_after_the_first_drop_the_upper_time_bound():
+    client, calls = _paged_client(total=1500)
+    _run_search(client)
+    assert calls[0]["body"]["timeTo"] == int(TIME_TO.timestamp())
+    assert calls[1]["body"]["timeTo"] is None
+
+
+def test_reading_stops_at_the_cap_and_says_so():
+    client, calls = _paged_client(total=50000, cap=2500)
+    result = _run_search(client)
+    assert result.events_read == 2500
+    assert result.truncated is True
+    # Последняя страница просит ровно остаток, а не целую тысячу.
+    assert calls[-1]["limit"] == 500
+
+
+def test_empty_page_stops_the_loop():
+    """Если SIEM соврал про totalCount, цикл не должен стать вечным."""
+    client, calls = _paged_client(total=0)
+    result = _run_search(client)
+    assert len(calls) == 1
+    assert result.events_read == 0
