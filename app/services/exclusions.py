@@ -75,9 +75,18 @@ def matching_threats(pattern: str) -> list[ThreatDomain]:
 
 
 def apply_rule(rule: DomainExclusion) -> int:
-    """Убрать уже загруженные домены, подошедшие под новое правило."""
+    """Убрать уже загруженные домены, подошедшие под новое правило.
+
+    Удаляем частями: у домена каскадом уходят найденные по нему хосты, и на
+    сотнях доменов одна транзакция заняла бы заметное время — а пока она
+    идёт, страницы портала не могут сохранить ничего.
+    """
+    from ..web_utils import WRITE_BATCH
+
     victims = matching_threats(rule.pattern)
-    for threat in victims:
-        db.session.delete(threat)
     rule.removed_count = len(victims)
+    for index, threat in enumerate(victims, start=1):
+        db.session.delete(threat)
+        if index % WRITE_BATCH == 0:
+            db.session.commit()
     return len(victims)

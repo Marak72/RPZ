@@ -72,15 +72,29 @@ def _configure_sqlite(app: Flask) -> None:
 
     @event.listens_for(Engine, "connect")
     def _set_pragmas(dbapi_connection, _record):  # pragma: no cover - драйвер
-        if type(dbapi_connection).__module__.split(".")[0] != "sqlite3":
-            return
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=15000")
+            mode = (cursor.fetchone() or [""])[0]
+            # 30 секунд — это про ожидание чужой записи, а не про её длину:
+            # свои транзакции портал держит короткими (см. WRITE_BATCH).
+            cursor.execute("PRAGMA busy_timeout=30000")
             cursor.execute("PRAGMA synchronous=NORMAL")
+        except Exception:  # noqa: BLE001 — драйвер может быть не sqlite3
+            return
         finally:
             cursor.close()
+
+        if str(mode).lower() != "wal":
+            # Без WAL любая запись блокирует читателей: портал будет падать
+            # с «database is locked» каждый раз, когда идёт фоновая выгрузка.
+            # Молчать об этом нельзя — причина неочевидна.
+            app.logger.warning(
+                "SQLite работает в режиме журнала %s вместо WAL. Обычно так "
+                "бывает, если файл базы лежит на сетевой файловой системе. "
+                "Страницы портала будут падать с «database is locked» во "
+                "время фоновых выгрузок.", mode,
+            )
 
 
 def _register_template_helpers(app: Flask) -> None:
@@ -151,6 +165,20 @@ def _register_error_handlers(app: Flask) -> None:
     def server_error(error):
         app.logger.exception("Внутренняя ошибка: %s", error)
         db.session.rollback()
+
+        # «database is locked» — не поломка, а гонка за запись: кто-то
+        # держал базу дольше отведённого ожидания. Данные при этом целы,
+        # и правильное действие — повторить, а не звать администратора.
+        if "database is locked" in str(getattr(error, "original_exception", error)):
+            return render_template(
+                "error.html",
+                code=500,
+                title="База была занята",
+                message="Изменения не сохранились: в этот момент шла фоновая "
+                        "выгрузка, и база отказала в записи.\n"
+                        "Вернитесь назад и повторите — данные не потеряны.",
+            ), 500
+
         return render_template(
             "error.html",
             code=500,

@@ -55,7 +55,12 @@ from ..settings_store import (
     set_setting,
 )
 from ..web_utils import csv_response as _csv_response
-from ..web_utils import LazyCounts, operator_required, service_guard
+from ..web_utils import (
+    WRITE_BATCH,
+    LazyCounts,
+    operator_required,
+    service_guard,
+)
 from .forms import (
     AppSettingsForm,
     ManualAddForm,
@@ -251,7 +256,10 @@ def rpz_refresh():
     )
     db.session.add(snap)
     db.session.flush()
-    for e in parsed:
+    # Зона бывает на тысячи записей. Пишем частями: одна транзакция на всё
+    # держала бы запись в SQLite секундами, и в это время ни одна страница
+    # портала не смогла бы ничего сохранить.
+    for index, e in enumerate(parsed, start=1):
         db.session.add(
             RpzEntry(
                 snapshot_id=snap.id,
@@ -262,6 +270,8 @@ def rpz_refresh():
                 action=e.action,
             )
         )
+        if index % WRITE_BATCH == 0:
+            db.session.commit()
 
     # Синхронизировать статусы кандидатов с фактическим состоянием зоны.
     blocked = {e.domain for e in parsed}

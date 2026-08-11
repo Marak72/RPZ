@@ -101,6 +101,7 @@ from ..settings_store import (
     set_setting,
 )
 from ..web_utils import (
+    WRITE_BATCH,
     LazyCounts,
     csv_response,
     fmt_dt,
@@ -1074,10 +1075,15 @@ def _sync_categories(client, start: date, end: date) -> int:
 
 
 def _recount_categories() -> None:
-    """Пересчитать, сколько доменов набралось в каждой категории."""
+    """Пересчитать, сколько доменов набралось в каждой категории.
+
+    Читаем только столбец с категориями и по частям: раньше сюда целиком
+    загружались все записи о доменах, а их бывают десятки тысяч.
+    """
     counts: dict = {}
-    for threat in ThreatDomain.query.all():
-        for raw in (threat.cat_ids or "").split(","):
+    query = db.session.query(ThreatDomain.cat_ids).yield_per(1000)
+    for (cat_ids,) in query:
+        for raw in (cat_ids or "").split(","):
             raw = raw.strip()
             if raw.isdigit():
                 counts[int(raw)] = counts.get(int(raw), 0) + 1
@@ -1095,6 +1101,11 @@ def _upsert_stats(stats, source: str, tracked: set | None = None,
     но отчёт может содержать и смежные категории домена).
 
     Возвращает ``(сохранено, новых, отсеяно правилами)``.
+
+    Пишется частями. Одна транзакция на тысячи доменов держала бы запись в
+    SQLite на всё время сохранения, и любая страница портала в этот момент
+    падала бы с «database is locked»: ждать столько никакой таймаут не
+    рассчитан.
     """
     catalogue = _catalogue()
     matcher = Matcher()
@@ -1140,6 +1151,9 @@ def _upsert_stats(stats, source: str, tracked: set | None = None,
         # Категория из CSV/ручного ввода приходит строкой, из API — списком id.
         threat.category = primary or stat.category or threat.category
         threat.category_title = titles or stat.category_title or threat.category_title
+
+        if total % WRITE_BATCH == 0:
+            db.session.commit()
 
     matcher.save_hits()
     db.session.commit()
@@ -1434,12 +1448,16 @@ def _collect_devices(client, start: date, end: date, tracked: list) -> int:
         .all()
     )
     found = 0
-    for threat in threats:
+    for index, threat in enumerate(threats, start=1):
         added, _gateway = _apply_devices(threat, mapping.get(threat.domain, []))
         if added:
             db.session.flush()
             threat.siem_hosts_count = threat.hosts.count()
             found += added
+        # Коммитим частями по той же причине, что и в _upsert_stats: длинная
+        # транзакция записи блокирует страницы портала.
+        if index % WRITE_BATCH == 0:
+            db.session.commit()
     db.session.commit()
     return found
 
