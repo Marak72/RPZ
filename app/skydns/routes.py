@@ -1619,7 +1619,7 @@ def _siem_form() -> SiemSettingsForm:
         username=get_setting(KEY_SIEM_USERNAME),
         client_id=get_setting(KEY_SIEM_CLIENT_ID, "mpx"),
         verify_ssl=get_bool(KEY_SIEM_VERIFY, False),
-        filter_template=get_setting(KEY_SIEM_FILTER, DEFAULT_SIEM_FILTER),
+        filter_template=get_siem_filter_template(),
         group_field=get_setting(KEY_SIEM_GROUP_FIELD, DEFAULT_SIEM_GROUP_FIELD),
         window_hours=get_int(KEY_SIEM_WINDOW, DEFAULT_WINDOW_HOURS),
         max_events=get_int(KEY_SIEM_MAX_EVENTS, DEFAULT_SIEM_MAX_EVENTS),

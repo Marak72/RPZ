@@ -886,3 +886,8 @@ tr:hover .copy-btn { opacity: 1; }
   font-size: .6875rem; color: var(--text-muted);
 }
 .job__link { margin-left: auto; font-weight: 600; }
+
+/* Задание идёт, но часть запросов не прошла — полоска должна об этом
+   говорить, иначе «найдено 0» выглядит как обычная пустая выборка. */
+.job--has-errors { border-left-color: var(--warning); }
+.job--has-errors .job__bar i { background: var(--warning); }

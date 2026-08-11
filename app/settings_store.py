@@ -49,9 +49,22 @@ KEY_SIEM_TIMEOUT = "siem_timeout"                # таймаут запроса
 # прежнее поведение — отдельный запрос на каждый домен.
 KEY_SIEM_CHUNK = "siem_domains_per_query"
 
-# Фильтр из рабочей практики: домен в SkyDNS-событиях попадает в datafield1
-# (запрошенное имя) либо datafield3 (имя из ответа/CNAME).
-DEFAULT_SIEM_FILTER = 'datafield1 = "{domain}" or datafield3 = "{domain}"'
+# Фильтр событий по домену.
+#
+# Разбирая DNS-запрос, SIEM раскладывает имя по полям: в datafield3 попадает
+# базовый домен (autodesk.com), в datafield4 — часть слева (update.delivery),
+# а полное имя целиком — в datafield6. Поэтому искать только по datafield3
+# недостаточно: так находятся домены вида example.com, а любой поддомен —
+# а это почти вся статистика SkyDNS — не совпадает ни с чем.
+DEFAULT_SIEM_FILTER = ('datafield1 = "{domain}" or datafield3 = "{domain}"'
+                       ' or datafield6 = "{domain}"')
+
+#: Шаблоны, которые портал ставил раньше и которые заведомо неполны.
+#: Сохранённое значение из этого списка заменяется текущим: оператор его не
+#: выбирал осознанно, это наше же умолчание, и оно молча не находило хосты.
+LEGACY_SIEM_FILTERS = (
+    'datafield1 = "{domain}" or datafield3 = "{domain}"',
+)
 # Конечный хост — это тот, кто обратился к домену, то есть источник события.
 # Можно перечислить несколько полей через запятую: адрес возьмётся из первого
 # заполненного (в событиях разных источников он лежит по-разному).
@@ -122,7 +135,10 @@ def get_protected_domains() -> set[str]:
 
 
 def get_siem_filter_template() -> str:
-    return get_setting(KEY_SIEM_FILTER, DEFAULT_SIEM_FILTER)
+    stored = get_setting(KEY_SIEM_FILTER, "")
+    if not stored or stored.strip() in LEGACY_SIEM_FILTERS:
+        return DEFAULT_SIEM_FILTER
+    return stored
 
 
 def get_siem_group_field() -> str:

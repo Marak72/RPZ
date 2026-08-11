@@ -733,3 +733,55 @@ def test_search_many_asks_for_the_name_fields():
 def test_search_many_ignores_empty_input():
     client = siem_client.SiemClient(siem_client.SiemConfig(base_url="https://s"))
     assert client.search_many([], TIME_FROM, TIME_TO, "x", "src.ip") == {}
+
+
+# --- фильтр должен находить поддомены -------------------------------------
+#
+# SIEM раскладывает имя DNS-запроса по полям: базовый домен в datafield3,
+# часть слева в datafield4, полное имя в datafield6. Фильтр, смотревший
+# только в datafield1/datafield3, находил домены вида example.com и молча
+# не находил ничего по любому поддомену — а это почти вся статистика SkyDNS.
+
+DNS_EVENT = {
+    "datafield1": None,
+    "datafield3": "footprintdns.com",
+    "datafield4": "0e944f01dc293570af5f21bd6458a3fd.afd",
+    "datafield5": "com",
+    "datafield6": "0e944f01dc293570af5f21bd6458a3fd.afd.footprintdns.com",
+    "object.value": "0e944f01dc293570af5f21bd6458a3fd.afd.footprintdns.com",
+    "src.ip": "10.61.50.40",
+}
+
+
+def _fields_matched(template: str, domain: str, event: dict) -> list[str]:
+    """Какие поля события совпадут с фильтром по этому домену."""
+    rendered = siem_client._render_filter(template, domain)
+    return [name for name in siem_client._filter_fields(template)
+            if f'{name} = "{domain}"' in rendered and event.get(name) == domain]
+
+
+def test_default_filter_matches_a_full_subdomain():
+    from app.settings_store import DEFAULT_SIEM_FILTER
+
+    matched = _fields_matched(
+        DEFAULT_SIEM_FILTER, DNS_EVENT["datafield6"], DNS_EVENT
+    )
+    assert matched == ["datafield6"], (
+        "полное имя лежит в datafield6 — без него поддомены не находятся"
+    )
+
+
+def test_default_filter_still_matches_a_base_domain():
+    from app.settings_store import DEFAULT_SIEM_FILTER
+
+    assert _fields_matched(DEFAULT_SIEM_FILTER, "footprintdns.com", DNS_EVENT) \
+        == ["datafield3"]
+
+
+def test_legacy_filter_missed_subdomains():
+    """Фиксируем сам дефект, чтобы старый шаблон не вернулся незаметно."""
+    from app.settings_store import LEGACY_SIEM_FILTERS
+
+    assert _fields_matched(
+        LEGACY_SIEM_FILTERS[0], DNS_EVENT["datafield6"], DNS_EVENT
+    ) == []

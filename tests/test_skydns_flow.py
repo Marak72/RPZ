@@ -886,3 +886,44 @@ def test_no_cap_on_the_number_of_domains(client):
     assert ThreatDomain.query.filter(
         ThreatDomain.siem_checked_at.is_(None)
     ).count() == 0
+
+
+# --- шаблон фильтра SIEM --------------------------------------------------
+
+def test_legacy_filter_is_replaced_by_the_current_one(client):
+    """Старое умолчание не находило поддомены — оператор его не выбирал."""
+    from app.settings_store import (
+        DEFAULT_SIEM_FILTER,
+        KEY_SIEM_FILTER,
+        LEGACY_SIEM_FILTERS,
+        get_siem_filter_template,
+        set_setting,
+    )
+
+    set_setting(KEY_SIEM_FILTER, LEGACY_SIEM_FILTERS[0])
+    db.session.commit()
+    assert get_siem_filter_template() == DEFAULT_SIEM_FILTER
+
+
+def test_own_filter_is_left_alone(client):
+    """Свой шаблон оператора трогать нельзя."""
+    from app.settings_store import (
+        KEY_SIEM_FILTER,
+        get_siem_filter_template,
+        set_setting,
+    )
+
+    mine = 'datafield6 = "{domain}" and event_src.category = "DNS server"'
+    set_setting(KEY_SIEM_FILTER, mine)
+    db.session.commit()
+    assert get_siem_filter_template() == mine
+
+
+def test_settings_page_shows_the_effective_filter(client):
+    """В форме должен стоять тот шаблон, который реально уходит в SIEM."""
+    from app.settings_store import KEY_SIEM_FILTER, LEGACY_SIEM_FILTERS, set_setting
+
+    set_setting(KEY_SIEM_FILTER, LEGACY_SIEM_FILTERS[0])
+    db.session.commit()
+    body = client.get("/skydns/settings").get_data(as_text=True)
+    assert "datafield6" in body

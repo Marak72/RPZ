@@ -407,14 +407,19 @@
       var bar = card.querySelector("[data-job-bar]");
       bar.style.width = (job.active ? job.percent : 100) + "%";
 
+      // Неудачи показываем рядом с находками: без этого «найдено 0» не
+      // отличить от «все запросы упали», а это разные ситуации.
       var counter = card.querySelector("[data-job-counter]");
+      var tail = " · найдено " + job.found
+        + (job.failed ? " · ошибок " + job.failed : "");
       if (job.active) {
         counter.textContent = job.total
-          ? job.processed + " из " + job.total + " · найдено " + job.found
+          ? job.processed + " из " + job.total + tail
           : "выполняется";
       } else {
         counter.textContent = job.status_title;
       }
+      if (job.failed) card.classList.add("job--has-errors");
 
       // Закрыть можно только завершённое: спрятать идущую работу — значит
       // потерять её из виду и решить, что ничего не запускалось.
