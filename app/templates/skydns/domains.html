@@ -20,6 +20,8 @@
 </div>
 
 <div class="tabs">
+  <a class="tab" href="{{ url_for('skydns.roots') }}">
+    {{ ico.icon('list') }} По корневым</a>
   <a class="tab {% if not status %}is-active{% endif %}"
      href="{{ url_for('skydns.domains', q=q, category=category) }}">Все</a>
   {% for code, title in statuses %}
@@ -53,7 +55,14 @@
     </button>
   </div>
 
-<form method="post" action="{{ url_for('skydns.lookup_batch') }}" data-select-scope>
+{# Подтверждение стоит на форме, а не на кнопке: опасное действие здесь одно
+   (удаление), остальные помечены data-no-confirm и уходят без вопросов. #}
+<form method="post" action="{{ url_for('skydns.lookup_batch') }}" data-select-scope
+      data-confirm="1" data-confirm-title="Удалить домены?"
+      data-confirm-ok="Удалить"
+      data-confirm-requires-selection="1"
+      data-confirm-body="Из разбора будет убрано доменов: <b>{n}</b>, вместе с найденными по ним хостами.<br>
+                         Если домены не угроза и будут приезжать снова — заведите правило в разделе «Исключения».">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <div class="table-wrap">
@@ -84,7 +93,16 @@
               {{ ico.icon('copy', 'icon icon-sm') }}
             </button>
           </td>
-          <td class="text-xs">{{ it.category_title or it.category or '—' }}</td>
+          <td class="text-xs">
+            {{ it.category_title or it.category or '—' }}
+            {% if it.subdomain %}
+            {# Показываем корень: по нему видно, что десяток соседних строк —
+               один и тот же сервис. #}
+            <div class="text-xs muted">
+              <a href="{{ url_for('skydns.domains', root=it.root_domain) }}">{{ it.root_domain }}</a>
+            </div>
+            {% endif %}
+          </td>
           <td>{% with st = it.status %}{% include "skydns/_status.html" %}{% endwith %}</td>
           <td class="num">{{ it.requests_count or '—' }}</td>
           <td class="num">
@@ -121,10 +139,20 @@
   </div>
 
   {% if current_user.is_operator and items %}
+  {# Одна форма, несколько адресов: formaction переключает действие, не
+     заставляя оператора отмечать домены заново под каждую кнопку. #}
   <div class="selection-bar">
     {{ ico.icon('search') }}
     <span>Выбрано: <strong data-selected-count>0</strong></span>
-    <button class="btn btn--sm btn--primary">Найти хосты в SIEM</button>
+    <button class="btn btn--sm btn--primary" data-no-confirm>Найти хосты в SIEM</button>
+    <button class="btn btn--sm" data-no-confirm
+            formaction="{{ url_for('skydns.vt_batch') }}">
+      {{ ico.icon('activity') }} Проверить в VT
+    </button>
+    <button class="btn btn--sm btn--danger"
+            formaction="{{ url_for('skydns.threats_delete_batch') }}">
+      {{ ico.icon('x') }} Удалить
+    </button>
     <span class="text-xs muted">
       Без выбора проверяются домены, которые ещё ни разу не проверялись.
     </span>

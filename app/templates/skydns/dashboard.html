@@ -119,7 +119,7 @@
     <div class="card__header">
       {{ ico.icon('hash') }}<span class="card__title">Категории угроз</span>
       <a class="btn btn--ghost btn--sm" style="margin-left:auto"
-         href="{{ url_for('skydns.categories') }}">Справочник</a>
+         href="{{ url_for('skydns.by_category') }}">Хосты по категориям</a>
     </div>
     <div class="card__body card__body--flush">
       {% if danger_cats %}
@@ -174,7 +174,8 @@
   <div class="card">
     <div class="card__header">
       {{ ico.icon('globe') }}<span class="card__title">Последние домены</span>
-      <a class="btn btn--ghost btn--sm" style="margin-left:auto" href="{{ url_for('skydns.domains') }}">Все домены</a>
+      <a class="btn btn--ghost btn--sm" style="margin-left:auto"
+         href="{{ url_for('skydns.roots') }}">По корневым</a>
     </div>
     <div class="card__body card__body--flush">
       {% if recent_threats %}

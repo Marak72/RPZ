@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Хосты по категориям{% endblock %}
+{% block subheading %}
+<div class="topbar__sub">Кто из организации ходит на какие угрозы</div>
+{% endblock %}
+
+{% block content %}
+{# Разбор начинается не с домена, а с вопроса «кто у нас ходит на фишинг».
+   Строка на категорию отвечает на него сразу, без обхода списка доменов. #}
+<div class="card">
+  <div class="card__header">
+    {{ ico.icon('hash') }}<span class="card__title">Категории угроз</span>
+    <a class="btn btn--ghost btn--sm" style="margin-left:auto"
+       href="{{ url_for('skydns.categories') }}">Справочник</a>
+  </div>
+  <div class="card__body card__body--flush">
+    {% if rows %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Категория</th><th class="num">Хостов</th>
+          <th class="num">Доменов</th><th class="num">Событий</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>
+            <a href="{{ url_for('skydns.category_hosts', cat_id=row.cat.id) }}">
+              {{ row.cat.title or row.cat.id }}</a>
+            {% if not row.cat.is_tracked %}
+            <span class="badge badge--neutral">не отслеживается</span>
+            {% endif %}
+          </td>
+          <td class="num">
+            {% if row.hosts %}
+            <span class="badge badge--danger">{{ row.hosts }}</span>
+            {% else %}<span class="text-xs muted">—</span>{% endif %}
+          </td>
+          <td class="num">{{ row.domains or '—' }}</td>
+          <td class="num">{{ '{:,}'.format(row.events).replace(',', ' ') if row.events else '—' }}</td>
+          <td class="num nowrap">
+            <a class="btn btn--ghost btn--sm"
+               href="{{ url_for('skydns.domains', category=row.cat.id) }}">Домены</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      {{ ico.icon('hash') }}
+      <div class="empty__title">Пока не на что смотреть</div>
+      <div class="empty__text">Загрузите статистику из SkyDNS и запустите
+        поиск хостов в SIEM.</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ cat.title if cat else 'Категория' }}{% endblock %}
+{% block subheading %}
+<div class="topbar__sub">Хосты, ходившие на домены этой категории</div>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ cat.title if cat else 'Категория ' ~ cat_id }}</h2>
+    <p>Найдено хостов: {{ total_hosts }}, доменов: {{ total_domains }}.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('skydns.by_category') }}">← Все категории</a>
+    <a class="btn" href="{{ url_for('skydns.domains', category=cat_id) }}">
+      {{ ico.icon('globe') }} Домены категории</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__body card__body--flush">
+    {% if rows %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Хост</th><th class="num">Событий</th>
+          <th>Куда ходил</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="value nowrap">
+            <a href="{{ url_for('skydns.host_view', address=row.address) }}">{{ row.address }}</a>
+          </td>
+          <td class="num">{{ '{:,}'.format(row.events).replace(',', ' ') if row.events else '—' }}</td>
+          <td>
+            {# Свёрнуто до корней: десяток случайных поддоменов одного
+               сервиса не помогает понять, куда именно ходил узел. #}
+            <div class="inline">
+              {% for root in row.roots|sort %}
+              <a class="badge badge--neutral"
+                 href="{{ url_for('skydns.domains', root=root) }}">{{ root }}</a>
+              {% endfor %}
+            </div>
+            <div class="text-xs muted">{{ row.domains|length }} имён</div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      {{ ico.icon('server') }}
+      <div class="empty__title">Хостов не найдено</div>
+      <div class="empty__text">По доменам этой категории проверка в SIEM ещё
+        не запускалась или не дала результата.</div>
+      <a class="btn btn--primary btn--sm"
+         href="{{ url_for('skydns.domains', category=cat_id) }}">
+        {{ ico.icon('search') }} Открыть домены категории</a>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

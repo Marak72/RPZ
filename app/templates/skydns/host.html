@@ -14,6 +14,58 @@
   </div>
 </div>
 
+{# Короткий ответ на «чем этот узел вообще занимается» — до чтения списка
+   имён, который у шумного хоста бывает на сотню строк. #}
+<div class="grid grid--2" style="margin-bottom:1rem">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('hash') }}<span class="card__title">Категории угроз</span>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if categories %}
+      <table class="table">
+        <tbody>
+          {% for cat in categories %}
+          <tr>
+            <td>
+              <a href="{{ url_for('skydns.category_hosts', cat_id=cat.id) }}">{{ cat.title }}</a>
+            </td>
+            <td class="num nowrap">
+              <span class="badge badge--danger">{{ cat.domains }} дом.</span>
+              <span class="text-xs muted">{{ cat.events }} соб.</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty"><div class="empty__text">Категории неизвестны.</div></div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('list') }}<span class="card__title">Сервисы (корневые домены)</span>
+    </div>
+    <div class="card__body">
+      {% if roots %}
+      <div class="inline">
+        {% for root, count in roots %}
+        <a class="badge {% if count > 3 %}badge--info{% else %}badge--neutral{% endif %}"
+           href="{{ url_for('skydns.domains', root=root) }}">{{ root }}
+          {%- if count > 1 %} · {{ count }}{% endif %}</a>
+        {% endfor %}
+      </div>
+      <div class="help">Число рядом — сколько имён этого сервиса узел трогал.
+        Десяток однотипных имён обычно означает один сервис, а не десяток угроз.</div>
+      {% else %}
+      <div class="empty"><div class="empty__text">Доменов пока нет.</div></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
 <div class="card">
   <div class="card__header">
     {{ ico.icon('globe') }}<span class="card__title">Куда обращался этот хост</span>

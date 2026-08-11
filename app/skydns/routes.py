@@ -43,6 +43,7 @@ from ..models import (
     THREAT_SOURCE_MANUAL,
     THREAT_STATUSES,
     BlockEntry,
+    DomainExclusion,
     SiemQueryLog,
     SkydnsCategory,
     SkydnsSyncLog,
@@ -51,10 +52,11 @@ from ..models import (
 )
 from ..services import domains as dm
 from ..services import skydns_client
-from ..services.exclusions import Matcher
+from ..services.exclusions import Matcher, apply_rule
 from ..services.jobs import JobError, active_job
 from ..services.jobs import start as start_job
 from ..services.siem_client import SiemClient, SiemError
+from ..services.vt_store import check_and_store, check_many
 from ..services.skydns_client import SkydnsClient, SkydnsError
 from ..settings_store import (
     DEFAULT_SIEM_FILTER,
@@ -104,6 +106,7 @@ from ..web_utils import (
     service_guard,
 )
 from .forms import (
+    ExclusionForm,
     ImportForm,
     ManualThreatForm,
     SiemProbeForm,
@@ -252,8 +255,12 @@ def _threats_query():
     status = (request.args.get("status") or "").strip()
     category = (request.args.get("category") or "").strip()
 
+    root = (request.args.get("root") or "").strip().lower()
+
     if search:
         query = query.filter(ThreatDomain.domain.ilike(f"%{search}%"))
+    if root:
+        query = query.filter(ThreatDomain.root_domain == root)
     if status:
         query = query.filter(ThreatDomain.status == status)
     if category:
@@ -298,6 +305,45 @@ def domains():
         items=pagination.items,
         pagination=pagination,
         categories=categories,
+        statuses=THREAT_STATUSES,
+        q=request.args.get("q", ""),
+        status=request.args.get("status", ""),
+        category=request.args.get("category", ""),
+        root=request.args.get("root", ""),
+    )
+
+
+@skydns_bp.route("/roots")
+@login_required
+def roots():
+    """Список, свёрнутый до корневых доменов.
+
+    В статистике сотни имён вида ``si21if1u2.afd.footprintdns.com`` — это
+    один сервис, размазанный по случайным поддоменам. Поштучно они не
+    разбираются: решение принимается один раз про ``footprintdns.com``.
+    Поэтому здесь строка — корень, а не имя.
+    """
+    rows = (
+        _threats_query()
+        .with_entities(
+            ThreatDomain.root_domain,
+            func.count(ThreatDomain.id).label("names"),
+            func.sum(ThreatDomain.requests_count).label("requests"),
+            func.sum(ThreatDomain.siem_hosts_count).label("hosts"),
+            func.max(ThreatDomain.last_seen).label("last_seen"),
+            func.min(ThreatDomain.category_title).label("category"),
+            func.sum(
+                db.case((ThreatDomain.status == THREAT_NEW, 1), else_=0)
+            ).label("new_count"),
+        )
+        .group_by(ThreatDomain.root_domain)
+        .order_by(func.count(ThreatDomain.id).desc(),
+                  ThreatDomain.root_domain)
+        .all()
+    )
+    return render_template(
+        "skydns/roots.html",
+        rows=rows,
         statuses=THREAT_STATUSES,
         q=request.args.get("q", ""),
         status=request.args.get("status", ""),
@@ -358,12 +404,23 @@ def threat_view(threat_id: int):
         .limit(10)
         .all()
     )
+    # Сколько ещё имён у того же сервиса: подсказывает, что разбирать надо
+    # не этот домен, а корень целиком.
+    related = 0
+    if threat.root_domain:
+        related = ThreatDomain.query.filter(
+            ThreatDomain.root_domain == threat.root_domain,
+            ThreatDomain.id != threat.id,
+        ).count()
+
     return render_template(
         "skydns/threat.html",
         threat=threat,
         hosts=hosts,
         lookups=lookups,
         form=form,
+        related=related,
+        suggested_pattern=dm.suggest_pattern(threat.domain),
         window_hours=get_int(KEY_SIEM_WINDOW, DEFAULT_WINDOW_HOURS),
         siem_configured=bool(get_setting(KEY_SIEM_URL)),
     )
@@ -378,7 +435,179 @@ def threat_delete(threat_id: int):
     db.session.delete(threat)
     db.session.commit()
     flash(f"Домен {domain} удалён из разбора.", "success")
+    return redirect(_back_url())
+
+
+@skydns_bp.route("/domains/delete-batch", methods=["POST"])
+@operator_required
+def threats_delete_batch():
+    """Удалить отмеченные домены разом."""
+    ids = request.form.getlist("threat_id", type=int)
+    if not ids:
+        flash("Не отмечено ни одного домена.", "info")
+        return redirect(_back_url())
+
+    SiemQueryLog.query.filter(SiemQueryLog.threat_id.in_(ids)).update(
+        {"threat_id": None}, synchronize_session=False
+    )
+    removed = ThreatDomain.query.filter(ThreatDomain.id.in_(ids)).delete(
+        synchronize_session=False
+    )
+    db.session.commit()
+    _recount_categories()
+    flash(f"Удалено доменов: {removed}.", "success")
+    return redirect(_back_url())
+
+
+# --- Правила исключений ---------------------------------------------------
+
+@skydns_bp.route("/exclusions", methods=["GET", "POST"])
+@login_required
+def exclusions():
+    """Правила «этот домен вредоносным не считать»."""
+    form = ExclusionForm()
+    if form.submit_exclusion.data and form.validate_on_submit():
+        if not current_user.is_operator:
+            flash("Изменение правил доступно только операторам.", "danger")
+            return redirect(url_for("skydns.exclusions"))
+        return _add_exclusion(form)
+
+    rows = (
+        DomainExclusion.query
+        .order_by(DomainExclusion.created_at.desc())
+        .all()
+    )
+    return render_template(
+        "skydns/exclusions.html",
+        form=form,
+        rows=rows,
+        covered=sum(r.removed_count for r in rows),
+    )
+
+
+def _add_exclusion(form):
+    pattern = dm.normalize_pattern(form.pattern.data)
+    if not pattern:
+        flash("Правило пустое.", "danger")
+        return redirect(url_for("skydns.exclusions"))
+    if DomainExclusion.query.filter_by(pattern=pattern).first():
+        flash(f"Правило {pattern} уже есть.", "info")
+        return redirect(url_for("skydns.exclusions"))
+
+    rule = DomainExclusion(
+        pattern=pattern,
+        reason=(form.reason.data or "").strip(),
+        created_by=current_user.id,
+    )
+    db.session.add(rule)
+    removed = apply_rule(rule)
+    db.session.commit()
+    _recount_categories()
+
+    flash(
+        f"Правило {pattern} сохранено. "
+        + (f"Убрано уже загруженных доменов: {removed}."
+           if removed else "Под него пока ничего не подошло."),
+        "success",
+    )
+    return redirect(url_for("skydns.exclusions"))
+
+
+@skydns_bp.route("/exclusions/<int:rule_id>/delete", methods=["POST"])
+@operator_required
+def exclusion_delete(rule_id: int):
+    rule = db.get_or_404(DomainExclusion, rule_id)
+    pattern = rule.pattern
+    db.session.delete(rule)
+    db.session.commit()
+    flash(
+        f"Правило {pattern} снято. Домены вернутся при следующей выгрузке.",
+        "success",
+    )
+    return redirect(url_for("skydns.exclusions"))
+
+
+@skydns_bp.route("/domains/<int:threat_id>/exclude", methods=["POST"])
+@operator_required
+def threat_exclude(threat_id: int):
+    """Завести правило прямо из карточки домена.
+
+    Самый частый путь: оператор видит очередной ``si21if1u2.afd.…``,
+    понимает, что весь сервис разбирать незачем, и одним действием убирает
+    и его, и всех родственников.
+    """
+    threat = db.get_or_404(ThreatDomain, threat_id)
+    scope = request.form.get("scope") or "root"
+    pattern = (dm.suggest_pattern(threat.domain) if scope == "root"
+               else threat.domain)
+
+    rule = DomainExclusion.query.filter_by(pattern=pattern).first()
+    if rule is None:
+        rule = DomainExclusion(
+            pattern=pattern,
+            reason=(request.form.get("reason") or "").strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(rule)
+    removed = apply_rule(rule)
+    db.session.commit()
+    _recount_categories()
+
+    flash(
+        f"Правило {pattern} сохранено, убрано доменов: {removed}. "
+        "Список правил — в разделе «Исключения».",
+        "success",
+    )
     return redirect(url_for("skydns.domains"))
+
+
+# --- VirusTotal -----------------------------------------------------------
+
+@skydns_bp.route("/domains/<int:threat_id>/vt", methods=["POST"])
+@operator_required
+def threat_vt(threat_id: int):
+    """Проверить домен в VirusTotal (тот же отчёт, что в сервисе ФСТЭК)."""
+    threat = db.get_or_404(ThreatDomain, threat_id)
+    report, message, category = check_and_store(
+        threat.domain, current_user.id, current_app.config["VT_TIMEOUT"]
+    )
+    db.session.commit()
+    flash(message, category)
+    return redirect(_back_url())
+
+
+@skydns_bp.route("/vt-batch", methods=["POST"])
+@operator_required
+def vt_batch():
+    """Проверить в VirusTotal отмеченные домены.
+
+    У бесплатного ключа VirusTotal жёсткие лимиты, поэтому за раз берётся
+    небольшая пачка, а при отказе по лимиту проверка останавливается — иначе
+    остаток запросов уйдёт впустую.
+    """
+    ids = request.form.getlist("threat_id", type=int)
+    threats = (ThreatDomain.query.filter(ThreatDomain.id.in_(ids)).all()
+               if ids else [])
+    if not threats:
+        flash("Не отмечено ни одного домена.", "info")
+        return redirect(_back_url())
+
+    batch = current_app.config["VT_BATCH_LIMIT"]
+    done, stopped = check_many(
+        [t.domain for t in threats[:batch]],
+        current_user.id, current_app.config["VT_TIMEOUT"],
+    )
+    db.session.commit()
+    flash(f"Проверено в VirusTotal: {done}.", "success")
+    if stopped:
+        flash(stopped, "warning")
+    if len(threats) > batch:
+        flash(
+            f"За один раз проверяется не больше {batch} доменов — "
+            f"осталось {len(threats) - batch}.",
+            "info",
+        )
+    return redirect(_back_url())
 
 
 # --- Поиск конечных хостов в MaxPatrol SIEM -------------------------------
@@ -643,6 +872,91 @@ def hosts():
     )
 
 
+def _category_rows(cat_id: int):
+    """Пары «хост — домен» для одной категории угроз.
+
+    Категории домена лежат строкой ``"3,12,71"``, поэтому отбор идёт по
+    вхождению с разделителями: без них поиск ``1`` поймал бы ещё 12 и 71.
+    """
+    marker = str(cat_id)
+    return (
+        db.session.query(ThreatHost, ThreatDomain)
+        .join(ThreatDomain, ThreatHost.threat_id == ThreatDomain.id)
+        .filter(db.or_(
+            ThreatDomain.cat_ids == marker,
+            ThreatDomain.cat_ids.like(f"{marker},%"),
+            ThreatDomain.cat_ids.like(f"%,{marker},%"),
+            ThreatDomain.cat_ids.like(f"%,{marker}"),
+        ))
+    )
+
+
+@skydns_bp.route("/by-category")
+@login_required
+def by_category():
+    """Сводка «категория угрозы → сколько хостов туда ходило».
+
+    Разбор обычно начинается не с домена, а с вопроса «кто у нас ходит на
+    фишинг»: одна строка на категорию отвечает на него сразу, без обхода
+    списка доменов.
+    """
+    rows = []
+    for cat in (SkydnsCategory.query
+                .order_by(SkydnsCategory.is_dangerous.desc(),
+                          SkydnsCategory.title).all()):
+        query = _category_rows(cat.id)
+        hosts_count = (
+            query.with_entities(func.count(func.distinct(ThreatHost.address)))
+            .scalar() or 0
+        )
+        if not hosts_count and not cat.domains_count:
+            continue
+        rows.append({
+            "cat": cat,
+            "hosts": hosts_count,
+            "domains": cat.domains_count or 0,
+            "events": query.with_entities(
+                func.sum(ThreatHost.events_count)
+            ).scalar() or 0,
+        })
+    rows.sort(key=lambda r: (-r["hosts"], -r["domains"]))
+    return render_template("skydns/by_category.html", rows=rows)
+
+
+@skydns_bp.route("/by-category/<int:cat_id>")
+@login_required
+def category_hosts(cat_id: int):
+    """Кто ходил на домены этой категории и куда именно."""
+    cat = db.session.get(SkydnsCategory, cat_id)
+    pairs = (
+        _category_rows(cat_id)
+        .order_by(ThreatHost.events_count.desc())
+        .all()
+    )
+
+    # Группируем по хосту: оператору важно «этот узел ходил вот сюда»,
+    # а не плоский список пар.
+    by_host: dict = {}
+    for host, threat in pairs:
+        row = by_host.setdefault(host.address, {
+            "address": host.address, "events": 0, "domains": [],
+            "roots": set(),
+        })
+        row["events"] += host.events_count or 0
+        row["domains"].append(threat)
+        row["roots"].add(threat.root_domain or threat.domain)
+
+    rows = sorted(by_host.values(), key=lambda r: -r["events"])
+    return render_template(
+        "skydns/category_hosts.html",
+        cat=cat,
+        cat_id=cat_id,
+        rows=rows,
+        total_hosts=len(rows),
+        total_domains=len({t.id for _, t in pairs}),
+    )
+
+
 @skydns_bp.route("/hosts.csv")
 @login_required
 def hosts_csv():
@@ -671,11 +985,30 @@ def host_view():
         .all()
     )
     total_events = sum(host.events_count for host, _ in rows)
+
+    # Категории и корневые домены этого узла: короткий ответ на вопрос
+    # «чем он вообще занимается», без чтения всего списка имён.
+    catalogue = _catalogue()
+    cats: dict = {}
+    roots: dict = {}
+    for host, threat in rows:
+        for cat_id in threat.cat_id_list:
+            row = cats.setdefault(cat_id, {"id": cat_id, "domains": 0,
+                                           "events": 0, "title": ""})
+            row["domains"] += 1
+            row["events"] += host.events_count or 0
+            known = catalogue.get(cat_id)
+            row["title"] = (known.title if known else "") or f"категория {cat_id}"
+        root = threat.root_domain or threat.domain
+        roots[root] = roots.get(root, 0) + 1
+
     return render_template(
         "skydns/host.html",
         address=address,
         rows=rows,
         total_events=total_events,
+        categories=sorted(cats.values(), key=lambda c: -c["events"]),
+        roots=sorted(roots.items(), key=lambda pair: -pair[1]),
     )
 
 

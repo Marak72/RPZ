@@ -30,6 +30,24 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <button class="btn">{{ ico.icon('lock') }} В блокировку RPZ</button>
     </form>
+    <form method="post" action="{{ url_for('skydns.threat_vt', threat_id=threat.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn" title="Проверить домен в VirusTotal">
+        {{ ico.icon('activity') }} Проверить в VT
+      </button>
+    </form>
+    {# Обратное действие: домен не угроза, и весь его сервис разбирать
+       незачем. Правило снимает и родственные имена — их обычно десятки. #}
+    <form method="post" action="{{ url_for('skydns.threat_exclude', threat_id=threat.id) }}"
+          data-confirm="1" data-confirm-title="Не считать вредоносным?"
+          data-confirm-ok="Исключить"
+          data-confirm-body="Правило <b>{{ suggested_pattern }}</b> уберёт из разбора этот домен
+                             и все имена того же сервиса, а следующая выгрузка их не вернёт.
+                             Правило можно снять в разделе «Исключения».">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="scope" value="root">
+      <button class="btn">{{ ico.icon('x') }} Не считать вредоносным</button>
+    </form>
     {% endif %}
   </div>
 </div>
@@ -48,6 +66,13 @@
     <div class="card__body">
       <dl class="kv">
         <dt>Домен</dt><dd class="mono">{{ threat.domain }}</dd>
+        <dt>Корневой домен</dt><dd class="mono">
+          <a href="{{ url_for('skydns.domains', root=threat.root_domain) }}">
+            {{ threat.root_domain or '—' }}</a>
+          {% if related %}
+          <span class="badge badge--info">ещё {{ related }} имён</span>
+          {% endif %}
+        </dd>
         <dt>Категория</dt><dd>{{ threat.category_title or threat.category or '—' }}</dd>
         <dt>Обращений</dt><dd>{{ threat.requests_count or '—' }}</dd>
         <dt>Блокировок SkyDNS</dt><dd>{{ threat.blocks_count or '—' }}</dd>

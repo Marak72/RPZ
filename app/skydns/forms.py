@@ -140,3 +140,14 @@ class SkydnsSettingsForm(FlaskForm):
     verify_ssl = BooleanField("Проверять сертификат SkyDNS", default=True)
     submit_skydns = SubmitField("Сохранить")
     test_skydns = SubmitField("Проверить подключение")
+
+
+class ExclusionForm(FlaskForm):
+    """Правило «этот домен вредоносным не считать»."""
+
+    pattern = StringField(
+        "Домен или маска",
+        validators=[DataRequired(message="Укажите домен или маску.")],
+    )
+    reason = StringField("Причина", validators=[Optional()])
+    submit_exclusion = SubmitField("Добавить правило")

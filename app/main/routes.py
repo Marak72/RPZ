@@ -37,7 +37,13 @@ from ..models import (
     UrlEntry,
     VtReport,
 )
-from ..services import doc_parser, rpz_parser, rpz_writer, vt_client
+from ..services import (
+    doc_parser,
+    rpz_parser,
+    rpz_writer,
+    vt_client,
+    vt_store,
+)
 from ..services.rpz_writer import PushError
 from ..services.ssh_client import SshError, read_remote_file, test_connection
 from ..settings_store import (
@@ -872,25 +878,13 @@ def manual_add():
 # --- VirusTotal ------------------------------------------------------------
 
 def _save_vt(result, error: str = "", value: str = "", kind: str = "domain") -> VtReport:
-    """Сохранить (или обновить) отчёт VirusTotal."""
-    value = (result.value if result else value).lower()
-    report = VtReport.query.filter_by(value=value).first()
-    if report is None:
-        report = VtReport(value=value)
-        db.session.add(report)
-    report.kind = result.kind if result else kind
-    report.checked_at = datetime.utcnow()
-    report.checked_by = current_user.id
-    report.error = error[:500]
-    if result:
-        report.malicious = result.malicious
-        report.suspicious = result.suspicious
-        report.harmless = result.harmless
-        report.undetected = result.undetected
-        report.reputation = result.reputation
-        report.total_engines = result.total_engines
-        report.permalink = result.permalink
-    return report
+    """Сохранить (или обновить) отчёт VirusTotal.
+
+    Сама запись живёт в ``vt_store``: отчёт общий с сервисом SkyDNS, и две
+    копии логики сохранения разъехались бы при первой же правке.
+    """
+    return vt_store.store(result, error=error, value=value, kind=kind,
+                          user_id=current_user.id)
 
 
 @main_bp.route("/vt/check", methods=["POST"])

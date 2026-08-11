@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Корневые домены{% endblock %}
+{% block subheading %}
+<div class="topbar__sub">Список, свёрнутый до регистрируемых имён</div>
+{% endblock %}
+
+{% block content %}
+<div class="toolbar">
+  <div class="tabs" style="margin-bottom:0;border:0">
+    <a class="tab" href="{{ url_for('skydns.domains') }}">
+      {{ ico.icon('globe') }} Все домены</a>
+    <a class="tab is-active" href="{{ url_for('skydns.roots') }}">
+      {{ ico.icon('list') }} По корневым</a>
+  </div>
+</div>
+
+{# Одна строка — один сервис. Сотня имён вида si21if1u2.afd.footprintdns.com
+   разбирается одним решением про footprintdns.com, а не поштучно. #}
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по имени" data-search-focus>
+      </div>
+      <select name="status" class="input--auto" onchange="this.form.submit()">
+        <option value="">Любой статус</option>
+        {% for code, title in statuses %}
+        <option value="{{ code }}" {% if status == code %}selected{% endif %}>{{ title }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn btn--sm">Применить</button>
+      {% if q or status %}
+      <a class="btn btn--ghost btn--sm" href="{{ url_for('skydns.roots') }}">Сбросить</a>
+      {% endif %}
+    </form>
+  </div>
+
+  <div class="card__body card__body--flush">
+    {% if rows %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Корневой домен</th><th>Категория</th>
+          <th class="num">Имён</th><th class="num">Не разобрано</th>
+          <th class="num">Обращений</th><th class="num">Хостов</th>
+          <th class="num"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td class="value">
+            <a href="{{ url_for('skydns.domains', root=row.root_domain) }}">
+              {{ row.root_domain or '—' }}</a>
+          </td>
+          <td class="text-xs muted">{{ row.category or '—' }}</td>
+          <td class="num">
+            {# Много имён под одним корнем — обычно один сервис с
+               генерируемыми поддоменами, а не сотня разных угроз. #}
+            <span class="badge {% if row.names > 5 %}badge--info{% else %}badge--neutral{% endif %}">{{ row.names }}</span>
+          </td>
+          <td class="num">
+            {% if row.new_count %}
+            <span class="badge badge--warning">{{ row.new_count }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="num">{{ '{:,}'.format(row.requests or 0).replace(',', ' ') }}</td>
+          <td class="num">
+            {% if row.hosts %}<span class="badge badge--danger">{{ row.hosts }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="num nowrap">
+            {% if current_user.is_operator %}
+            <form method="post" class="inline"
+                  action="{{ url_for('skydns.exclusions') }}"
+                  data-confirm="1"
+                  data-confirm-title="Не считать вредоносным?"
+                  data-confirm-ok="Исключить"
+                  data-confirm-body="Правило <b>*.{{ row.root_domain }}</b> уберёт из разбора {{ row.names }} имён этого сервиса и не даст им вернуться при следующей выгрузке.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="pattern" value="*.{{ row.root_domain }}">
+              <input type="hidden" name="submit_exclusion" value="1">
+              <button class="btn btn--ghost btn--sm" title="Не считать вредоносным">
+                {{ ico.icon('lock') }}
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      {{ ico.icon('globe') }}
+      <div class="empty__title">Доменов пока нет</div>
+      <div class="empty__text">Загрузите статистику из SkyDNS.</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

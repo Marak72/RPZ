@@ -102,6 +102,27 @@ def subdomain_part(value) -> str:
     return domain[: -(len(root) + 1)]
 
 
+def normalize_pattern(value) -> str:
+    """Привести правило к каноническому виду.
+
+    Оператор пишет по-разному: ``*.Example.COM``, ``.example.com``,
+    ``https://example.com/``. Не приведя это к одному виду, мы завели бы
+    два правила про одно и то же и не смогли бы найти дубликат.
+    """
+    raw = str(value or "").strip().lower().rstrip(".")
+    if not raw:
+        return ""
+    if "//" in raw:
+        raw = raw.split("//", 1)[1]
+    raw = raw.split("/")[0].split("?")[0]
+
+    wildcard = raw.startswith("*.") or raw.startswith(".")
+    base = normalize(raw)
+    if not base:
+        return ""
+    return f"*.{base}" if wildcard else base
+
+
 def matches(pattern: str, domain: str) -> bool:
     """Подходит ли домен под правило исключения.
 

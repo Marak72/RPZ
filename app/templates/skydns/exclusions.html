@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Исключения{% endblock %}
+{% block subheading %}
+<div class="topbar__sub">Домены, которые не считаются вредоносными</div>
+{% endblock %}
+
+{% block content %}
+<div class="note">
+  Категории SkyDNS срабатывают не только на угрозы: в выборку попадают
+  телеметрия, обновления и CDN-имена вида <code>si21if1u2.afd.footprintdns.com</code>.
+  Правило убирает такой сервис целиком — и уже загруженные домены, и те,
+  что приедут при следующей выгрузке.
+</div>
+
+<div class="grid grid--2 mt-2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('lock') }}<span class="card__title">Новое правило</span>
+    </div>
+    <form method="post">
+      <div class="card__body">
+        {{ form.hidden_tag() }}
+        <div class="field">
+          {{ form.pattern.label(class="label") }}
+          {{ form.pattern(placeholder="*.footprintdns.com") }}
+          <div class="help">
+            <code>example.com</code> — только это имя.<br>
+            <code>*.example.com</code> — имя и все поддомены.
+          </div>
+        </div>
+        <div class="field">
+          {{ form.reason.label(class="label") }}
+          {{ form.reason(placeholder="телеметрия Microsoft, разобрано 11.08") }}
+          <div class="help">Через полгода никто не вспомнит, почему домен
+            в списке. Одна строка экономит этот разговор.</div>
+        </div>
+      </div>
+      <div class="card__footer">
+        {{ form.submit_exclusion(class="btn btn--primary",
+                                 disabled=(not current_user.is_operator)) }}
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('info') }}<span class="card__title">Как это работает</span>
+    </div>
+    <div class="card__body">
+      <div class="steps">
+        <div class="step">
+          <div class="step__num">1</div>
+          <div><b>Сразу</b> — совпавшие домены убираются из разбора вместе
+            с найденными по ним хостами.</div>
+        </div>
+        <div class="step">
+          <div class="step__num">2</div>
+          <div><b>Дальше</b> — выгрузка из SkyDNS их больше не сохраняет,
+            а в итоге задания видно, сколько отсеяно.</div>
+        </div>
+        <div class="step">
+          <div class="step__num">3</div>
+          <div><b>Передумали</b> — снимите правило, и домены вернутся
+            при следующей выгрузке. Ничего не теряется безвозвратно.</div>
+        </div>
+      </div>
+      {% if covered %}
+      <div class="help mt-1">Всего убрано правилами: {{ covered }} доменов.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('list') }}<span class="card__title">Действующие правила</span>
+    <span class="badge badge--neutral" style="margin-left:auto">{{ rows|length }}</span>
+  </div>
+  <div class="card__body card__body--flush">
+    {% if rows %}
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Правило</th><th>Причина</th>
+          <th class="num">Убрано</th><th class="num">Срабатываний</th>
+          <th>Добавлено</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in rows %}
+        <tr>
+          <td class="value">
+            {{ rule.pattern }}
+            {% if rule.is_wildcard %}
+            <span class="badge badge--info">с поддоменами</span>
+            {% endif %}
+          </td>
+          <td>{{ rule.reason or '—' }}</td>
+          <td class="num">{{ rule.removed_count }}</td>
+          {# Ноль срабатываний за долгий срок — повод снять правило. #}
+          <td class="num">{{ rule.hits_count }}</td>
+          <td class="text-xs muted nowrap">
+            {{ rule.created_at.strftime('%d.%m.%Y') }}<br>
+            {{ rule.author.display_name if rule.author else '—' }}
+          </td>
+          <td class="num">
+            {% if current_user.is_operator %}
+            <form method="post"
+                  action="{{ url_for('skydns.exclusion_delete', rule_id=rule.id) }}"
+                  data-confirm="1"
+                  data-confirm-title="Снять правило?"
+                  data-confirm-ok="Снять"
+                  data-confirm-body="Домены под <b>{{ rule.pattern }}</b> вернутся в разбор при следующей выгрузке.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn--ghost btn--sm">{{ ico.icon('x') }}</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty">
+      {{ ico.icon('lock') }}
+      <div class="empty__title">Правил пока нет</div>
+      <div class="empty__text">Заведите первое — или нажмите «Не считать
+        вредоносным» на карточке любого домена.</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

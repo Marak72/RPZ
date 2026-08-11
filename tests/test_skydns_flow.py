@@ -562,3 +562,248 @@ def test_login_failure_marks_the_job_as_failed(client):
     job = BackgroundJob.query.one()
     assert job.status == JOB_FAILED
     assert "401" in job.message
+
+
+# --- правила исключений ---------------------------------------------------
+
+def _exclude(client, pattern, reason=""):
+    return client.post("/skydns/exclusions", data={
+        "pattern": pattern, "reason": reason, "submit_exclusion": "1",
+    }, follow_redirects=True)
+
+
+def test_rule_removes_already_loaded_domains(client):
+    """Правило работает назад: разбирать уже загруженное заново незачем."""
+    _add_threat("si21if1u2.afd.footprintdns.com")
+    _add_threat("aa11.afd.footprintdns.com")
+    _add_threat("evil.ru")
+
+    _exclude(client, "*.footprintdns.com", "телеметрия")
+
+    assert {t.domain for t in ThreatDomain.query.all()} == {"evil.ru"}
+    from app.models import DomainExclusion
+    assert DomainExclusion.query.one().removed_count == 2
+
+
+def test_rule_respects_the_label_boundary(client):
+    _add_threat("evilfootprintdns.com")
+    _exclude(client, "*.footprintdns.com")
+    assert ThreatDomain.query.filter_by(domain="evilfootprintdns.com").first()
+
+
+def test_rule_keeps_new_domains_out_of_the_next_sync(client, monkeypatch):
+    """И вперёд: иначе отсеянное возвращалось бы каждой выгрузкой."""
+    from app.models import BackgroundJob, DomainExclusion
+    from app.services.skydns_client import Category, DomainStat
+
+    _exclude(client, "*.footprintdns.com")
+    _fake_skydns(
+        monkeypatch,
+        [Category(3, "Malware", True)],
+        [DomainStat("x1.afd.footprintdns.com", requests=5, cat_ids=[3]),
+         DomainStat("evil.ru", requests=7, cat_ids=[3])],
+    )
+    _sync(client)
+
+    assert {t.domain for t in ThreatDomain.query.all()} == {"evil.ru"}
+    assert "Отсеяно правилами исключений: 1" in BackgroundJob.query.one().message
+    # Счётчик срабатываний отвечает на вопрос «правило ещё нужно?».
+    assert DomainExclusion.query.one().hits_count == 1
+
+
+def test_duplicate_rule_is_not_created_twice(client):
+    _exclude(client, "*.example.com")
+    _exclude(client, "*.Example.com.")
+    from app.models import DomainExclusion
+    assert DomainExclusion.query.count() == 1
+
+
+def test_removing_a_rule_lets_domains_come_back(client, monkeypatch):
+    from app.models import DomainExclusion
+    from app.services.skydns_client import Category, DomainStat
+
+    _exclude(client, "*.footprintdns.com")
+    rule_id = DomainExclusion.query.one().id
+    client.post(f"/skydns/exclusions/{rule_id}/delete", follow_redirects=True)
+
+    _fake_skydns(
+        monkeypatch,
+        [Category(3, "Malware", True)],
+        [DomainStat("x1.afd.footprintdns.com", requests=5, cat_ids=[3])],
+    )
+    _sync(client)
+    assert ThreatDomain.query.filter_by(
+        domain="x1.afd.footprintdns.com").first()
+
+
+def test_exclude_from_the_threat_card_covers_the_whole_service(client):
+    """Самый частый путь: увидел очередной поддомен — убрал сервис целиком."""
+    kept = _add_threat("evil.ru")
+    threat_id = _add_threat("si21if1u2.afd.footprintdns.com")
+    _add_threat("bb22.afd.footprintdns.com")
+
+    client.post(f"/skydns/domains/{threat_id}/exclude", data={"scope": "root"},
+                follow_redirects=True)
+
+    from app.models import DomainExclusion
+    assert DomainExclusion.query.one().pattern == "*.footprintdns.com"
+    assert [t.id for t in ThreatDomain.query.all()] == [kept]
+
+
+# --- свёртка до корневых --------------------------------------------------
+
+def test_root_domain_is_filled_on_insert(client, monkeypatch):
+    from app.services.skydns_client import Category, DomainStat
+
+    _fake_skydns(
+        monkeypatch,
+        [Category(3, "Malware", True)],
+        [DomainStat("si21if1u2.afd.footprintdns.com", requests=5, cat_ids=[3])],
+    )
+    _sync(client)
+    threat = ThreatDomain.query.one()
+    assert threat.root_domain == "footprintdns.com"
+    assert threat.subdomain == "si21if1u2.afd"
+
+
+def test_roots_page_groups_names_of_one_service(client):
+    _add_threat("a.footprintdns.com")
+    _add_threat("b.footprintdns.com")
+    _add_threat("evil.ru")
+    for threat in ThreatDomain.query.all():
+        from app.services.domains import registrable
+        threat.root_domain = registrable(threat.domain)
+    db.session.commit()
+
+    body = client.get("/skydns/roots").get_data(as_text=True)
+    assert "footprintdns.com" in body
+    # Отдельных строк на каждое имя быть не должно — в этом весь смысл.
+    assert "a.footprintdns.com" not in body
+
+
+def test_domains_can_be_filtered_by_root(client):
+    from app.services.domains import registrable
+
+    _add_threat("a.footprintdns.com")
+    _add_threat("evil.ru")
+    for threat in ThreatDomain.query.all():
+        threat.root_domain = registrable(threat.domain)
+    db.session.commit()
+
+    body = client.get("/skydns/domains?root=footprintdns.com").get_data(as_text=True)
+    assert "a.footprintdns.com" in body
+    assert "evil.ru" not in body
+
+
+# --- хосты по категориям --------------------------------------------------
+
+def test_category_page_shows_who_went_where(client):
+    from app.models import SkydnsCategory
+
+    db.session.add(SkydnsCategory(id=4, title="Phishing", is_dangerous=True))
+    threat = ThreatDomain(domain="phish.ru", cat_ids="4", root_domain="phish.ru")
+    db.session.add(threat)
+    db.session.flush()
+    db.session.add(ThreatHost(threat_id=threat.id, address="10.61.50.40",
+                              events_count=12, source="siem"))
+    db.session.commit()
+
+    body = client.get("/skydns/by-category").get_data(as_text=True)
+    assert "Phishing" in body
+
+    body = client.get("/skydns/by-category/4").get_data(as_text=True)
+    assert "10.61.50.40" in body and "phish.ru" in body
+
+
+def test_category_match_does_not_bleed_between_ids(client):
+    """cat_ids хранится строкой: поиск «1» не должен ловить 12 и 71."""
+    from app.models import SkydnsCategory
+
+    db.session.add(SkydnsCategory(id=1, title="Новые домены", is_dangerous=True))
+    threat = ThreatDomain(domain="bot.ru", cat_ids="12,71", root_domain="bot.ru")
+    db.session.add(threat)
+    db.session.flush()
+    db.session.add(ThreatHost(threat_id=threat.id, address="10.0.0.9",
+                              events_count=1, source="siem"))
+    db.session.commit()
+
+    body = client.get("/skydns/by-category/1").get_data(as_text=True)
+    assert "10.0.0.9" not in body
+
+
+# --- пакетное удаление ----------------------------------------------------
+
+def test_batch_delete_removes_selected_domains(client):
+    keep = _add_threat("keep.ru")
+    drop = _add_threat("drop.ru")
+    client.post("/skydns/domains/delete-batch",
+                data={"threat_id": [str(drop)]}, follow_redirects=True)
+    assert [t.id for t in ThreatDomain.query.all()] == [keep]
+
+
+# --- проверка в VirusTotal ------------------------------------------------
+
+def _fake_vt(monkeypatch, malicious=7, rate_limit_after=None):
+    """Подставной VirusTotal: считает вызовы, умеет упереться в лимит."""
+    from app.services import vt_client, vt_store
+
+    calls = []
+
+    def fake_check(value, api_key, timeout=20):
+        calls.append(value)
+        if rate_limit_after is not None and len(calls) > rate_limit_after:
+            raise vt_client.VtRateLimit("Превышен лимит запросов.")
+        return vt_client.VtResult(
+            value=value, kind="domain", malicious=malicious,
+            harmless=60, permalink=f"https://vt/{value}",
+        )
+
+    monkeypatch.setattr(vt_store.vt_client, "check", fake_check)
+    return calls
+
+
+def test_vt_check_from_the_threat_card(client, monkeypatch):
+    from app.models import VtReport
+
+    calls = _fake_vt(monkeypatch)
+    threat_id = _add_threat("evil.ru")
+    client.post(f"/skydns/domains/{threat_id}/vt", follow_redirects=True)
+
+    assert calls == ["evil.ru"]
+    report = VtReport.query.filter_by(value="evil.ru").one()
+    assert report.malicious == 7
+    assert report.total_engines == 67
+
+
+def test_vt_batch_checks_selected_domains(client, monkeypatch):
+    calls = _fake_vt(monkeypatch)
+    ids = [_add_threat("a.ru"), _add_threat("b.ru")]
+    client.post("/skydns/vt-batch",
+                data={"threat_id": [str(i) for i in ids]},
+                follow_redirects=True)
+    assert sorted(calls) == ["a.ru", "b.ru"]
+
+
+def test_vt_batch_stops_on_the_rate_limit(client, monkeypatch):
+    """Упёршись в лимит, продолжать бессмысленно — запросы уйдут в отказы."""
+    calls = _fake_vt(monkeypatch, rate_limit_after=1)
+    ids = [_add_threat(f"d{i}.ru") for i in range(4)]
+    response = client.post("/skydns/vt-batch",
+                           data={"threat_id": [str(i) for i in ids]},
+                           follow_redirects=True)
+    assert len(calls) == 2, "после отказа по лимиту запросы должны прекратиться"
+    assert "Проверка остановлена" in response.get_data(as_text=True)
+
+
+def test_vt_failure_is_recorded_not_lost(client, monkeypatch):
+    from app.models import VtReport
+    from app.services import vt_client, vt_store
+
+    def boom(value, api_key, timeout=20):
+        raise vt_client.VtError("Ключ VirusTotal не задан.")
+
+    monkeypatch.setattr(vt_store.vt_client, "check", boom)
+    threat_id = _add_threat("evil.ru")
+    client.post(f"/skydns/domains/{threat_id}/vt", follow_redirects=True)
+
+    assert "не задан" in VtReport.query.filter_by(value="evil.ru").one().error
