@@ -458,6 +458,9 @@ class SiemClient:
                 group_field=fields,
                 time_from=time_from,
                 time_to=time_to,
+                select=_select_for(fields),
+                # Группировку не просим намеренно, см. _build_group_query.
+                group_by=[],
             ),
             limit,
         )
@@ -479,7 +482,7 @@ class SiemClient:
         time_to: datetime,
         filter_template: str,
         group_field: str,
-        limit: int = 20,
+        limit: int = 200,
     ) -> dict:
         """Диагностика: какие поля events на самом деле заполнены.
 
@@ -492,6 +495,10 @@ class SiemClient:
         невозможно, поэтому здесь запрашивается вся таксономия, а группировка
         не запрашивается вовсе — нужны сырые события, чтобы разглядеть, где
         в них адрес.
+
+        Строк берём заметно больше, чем нужно для показа: адреса рабочих
+        станций распределены по выборке неравномерно, и по двум десяткам
+        событий легко решить, что хост всего один.
         """
         fields = _group_fields(group_field)
         query_filter = _render_filter(filter_template, (domain or "").strip().lower())
@@ -517,7 +524,7 @@ class SiemClient:
             "row_keys": sorted(rows[0].keys()) if rows and isinstance(rows[0], dict)
                         else [],
             "filled": _filled_fields(rows),
-            "suggested": _address_candidates(rows, fields, query_filter),
+            "suggested": _address_candidates(rows, fields, query_filter, domain),
             "rows": rows[:3],
             "parsed": [
                 {"address": h.address, "events": h.events_count}
@@ -565,6 +572,35 @@ def _group_fields(group_field) -> list[str]:
     return fields or ["src.ip"]
 
 
+#: Поля таксономии, в которых вообще может лежать адрес узла. Используются
+#: двояко: их запрашивает поиск (сверх настроенных) и по ним диагностика
+#: узнаёт «адресные» поля, даже когда значение не похоже на IP.
+KNOWN_ADDRESS_FIELDS = (
+    "src.ip", "src.host", "src.hostname", "src.fqdn",
+    "dst.ip", "dst.host", "dst.hostname", "dst.fqdn",
+    "assigned_src_ip", "assigned_src_host",
+    "assigned_dst_ip", "assigned_dst_host",
+    "event_src.host", "event_src.ip", "event_src.fqdn", "event_src.hostname",
+    "recv_ipv4", "recv_ipv6", "recv_host", "nas_ip", "nas_fqdn",
+)
+
+
+def _select_for(fields: list[str]) -> list[str]:
+    """Какие поля просить у SIEM при обычном поиске.
+
+    Настроенные поля плюс остальные адресные: ``select`` — это проекция, на
+    отбор строк он не влияет, а лишний десяток колонок дешевле, чем ещё один
+    заход к оператору с вопросом «а что у вас в событии заполнено».
+    Всю таксономию (195 полей) тянуть при этом незачем: на сотнях доменов
+    это уже мегабайты ответа.
+    """
+    ordered = list(fields)
+    for name in KNOWN_ADDRESS_FIELDS + ("time", "action"):
+        if name not in ordered:
+            ordered.append(name)
+    return ordered
+
+
 def _build_group_query(
     query_filter: str,
     group_field,
@@ -573,13 +609,20 @@ def _build_group_query(
     select: list[str] | None = None,
     group_by: list[str] | None = None,
 ) -> dict:
-    """Тело запроса ``/api/events/v2/events`` с группировкой и подсчётом.
+    """Тело запроса ``/api/events/v2/events``.
 
-    ``groupBy`` отправляется, но полагаться на него нельзя: в наблюдаемой
-    инсталляции SIEM возвращает обычные события, а не готовые группы.
-    Поэтому сведение по адресам всё равно делается на нашей стороне
-    (см. :func:`_parse_group_rows`) — так работает и там, где группировка
-    отрабатывает, и там, где нет.
+    Группировку мы у SIEM не просим, и это осознанно. Один DNS-запрос
+    порождает пару событий: ``action=receive`` — сервер принял запрос от
+    рабочей станции (её адрес в ``src.ip``), и ``action=send`` — сервер
+    переслал запрос вышестоящему DNS (там ``src.ip`` пуст, а в ``dst.ip``
+    стоит внешний резолвер).
+
+    С ``groupBy`` наблюдаемая инсталляция возвращала по одной строке на
+    отметку времени и выбирала из такой пары представителя без ``src.ip`` —
+    поиск честно находил события и не находил ни одного адреса. Без
+    группировки приходят все события, а сведение по адресам делается на
+    нашей стороне (см. :func:`_parse_group_rows`): события с пустым полем
+    просто пропускаются.
     """
     fields = _group_fields(group_field)
     grouping = fields if group_by is None else group_by
@@ -713,9 +756,7 @@ _NOT_ADDRESS = {"time", "_meta", "recv_time", "original_time", "start_time",
                 "id", "uuid", "siem_id", "input_id", "job_id", "task_id",
                 "chain_id", "agent_id", "scope_id", "tenant_id", "site_id"}
 
-#: Похоже на IPv4/IPv6 либо на имя узла (без пробелов, с точкой или дефисом).
-_IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
-_IPV6 = re.compile(r"^[0-9a-fA-F:]{3,45}$")
+#: Похоже на имя узла: без пробелов, с точкой или дефисом внутри.
 _HOSTNAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{1,62})$")
 
 
@@ -748,34 +789,78 @@ def _filled_fields(rows: list) -> list[dict]:
     ]
 
 
+def _as_ip(value):
+    """Разобрать значение как IP-адрес; иначе ``None``."""
+    import ipaddress
+
+    text = str(value).strip()
+    if not text or " " in text:
+        return None
+    try:
+        return ipaddress.ip_address(text)
+    except ValueError:
+        return None
+
+
 def _looks_like_address(value: str) -> bool:
     text = str(value).strip()
     if not text or " " in text:
         return False
-    if _IPV4.match(text):
-        return True
-    if ":" in text and _IPV6.match(text):
+    if _as_ip(text) is not None:
         return True
     return bool(_HOSTNAME.match(text)) and ("." in text or "-" in text)
 
 
+def _address_kind(value: str) -> str:
+    """Как пометить значение в подсказке.
+
+    Разница между внутренним и внешним адресом здесь решающая: в событиях
+    DNS-сервера ``dst.ip`` — это вышестоящий резолвер в интернете, а вовсе
+    не рабочая станция организации. Подписав адрес «внешний», подсказка
+    удерживает от очевидной, но неверной настройки.
+    """
+    address = _as_ip(value)
+    if address is None:
+        return "имя узла"
+    if address.is_private or address.is_loopback or address.is_link_local:
+        return "внутренний адрес"
+    return "внешний адрес"
+
+
+#: Порядок подсказок: сначала то, что похоже на рабочую станцию.
+_KIND_ORDER = {"внутренний адрес": 0, "имя узла": 1, "внешний адрес": 2}
+
+
 def _address_candidates(rows: list, configured: list[str],
-                        query_filter: str = "") -> list[dict]:
-    """Поля, которые похожи на адрес конечного хоста.
+                        query_filter: str = "", domain: str = "") -> list[dict]:
+    """Поля, которые могут содержать адрес конечного хоста.
 
-    Оператору не обязательно знать таксономию SIEM наизусть: если значение
-    выглядит как IP-адрес или имя узла, поле стоит предложить как замену
-    настроенному.
+    Оператору не обязательно знать таксономию SIEM наизусть. Поле попадает
+    в подсказки, если оно известно как адресное либо его значение — это
+    настоящий IP-адрес. Проверки «похоже на имя узла» недостаточно: под неё
+    подходит и ``taxonomy_version``, и сам проверяемый домен.
 
-    Поля из самого фильтра отбрасываются: в них лежит проверяемый домен, а
-    он тоже выглядит как имя узла — и возглавил бы список подсказок.
+    Отбрасываются: поля из фильтра, поля со значением проверяемого домена
+    (``datafield6``, ``object.value`` — там лежит запрошенное имя) и уже
+    настроенные.
     """
     skip = set(configured) | _NOT_ADDRESS
     skip |= set(re.findall(r"[A-Za-z_][\w.]*", query_filter or ""))
-    return [
-        item for item in _filled_fields(rows)
-        if item["field"] not in skip and _looks_like_address(item["sample"])
-    ][:12]
+    needle = (domain or "").strip().lower()
+
+    out = []
+    for item in _filled_fields(rows):
+        name, sample = item["field"], item["sample"]
+        if name in skip:
+            continue
+        if needle and needle in sample.lower():
+            continue
+        if name not in KNOWN_ADDRESS_FIELDS and _as_ip(sample) is None:
+            continue
+        out.append(dict(item, kind=_address_kind(sample)))
+
+    out.sort(key=lambda i: (_KIND_ORDER.get(i["kind"], 3), -i["rows"], i["field"]))
+    return out[:12]
 
 
 def _count_keys(row: dict) -> list[str]:

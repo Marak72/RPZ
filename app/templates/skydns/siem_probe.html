@@ -75,11 +75,13 @@
     {{ ico.icon('check-circle') }}<span class="card__title">Похоже на адрес хоста</span>
   </div>
   <div class="card__body">
-    <p class="help">Значения этих полей выглядят как IP-адрес или имя узла.
-      Скопируйте подходящее имя в настройку «Поле группировки».</p>
+    <p class="help">Скопируйте подходящее имя в настройку «Поле группировки».
+      Внешние адреса вверх списка не поднимаются: в событиях DNS-сервера это
+      вышестоящий резолвер в интернете, а не рабочая станция организации.</p>
     <div class="table-wrap">
       <table class="table">
-        <thead><tr><th>Поле</th><th class="num">Заполнено строк</th>
+        <thead><tr><th>Поле</th><th>Что это</th>
+                   <th class="num">Заполнено строк</th>
                    <th>Пример значения</th></tr></thead>
         <tbody>
           {% for item in report.suggested %}
@@ -88,7 +90,12 @@
               <button type="button" class="copy-btn" data-copy="{{ item.field }}"
                       title="Скопировать имя поля">{{ ico.icon('copy', 'icon icon-sm') }}</button>
             </td>
-            <td class="num">{{ item.rows }} из {{ report.rows_returned }}</td>
+            <td>
+              <span class="badge badge--{{ 'success' if item.kind == 'внутренний адрес'
+                                          else ('danger' if item.kind == 'внешний адрес'
+                                                else 'neutral') }}">{{ item.kind }}</span>
+            </td>
+            <td class="num nowrap">{{ item.rows }} из {{ report.rows_returned }}</td>
             <td class="mono">{{ item.sample }}</td>
           </tr>
           {% endfor %}

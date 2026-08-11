@@ -263,13 +263,35 @@ def test_search_posts_to_events_endpoint_with_limit(monkeypatch):
     assert request.get_header("Content-type").startswith("application/json")
 
 
-def test_search_body_carries_filter_group_and_period(monkeypatch):
+def test_search_body_carries_filter_and_period(monkeypatch):
     _, request = _search(monkeypatch, {"totalCount": 0, "events": []})
     body = json.loads(request.data.decode())
     assert body["filter"]["where"] == \
         'datafield1 = "obltub.ru" or datafield3 = "obltub.ru"'
-    assert body["filter"]["groupBy"] == ["dst.host"]
     assert body["timeFrom"] == int(TIME_FROM.timestamp())
+
+
+def test_search_does_not_ask_siem_to_group(monkeypatch):
+    """С группировкой SIEM отдавал по строке на отметку времени.
+
+    Один DNS-запрос — это пара событий (receive от станции и send наверх),
+    и представителем пары оказывалось событие с пустым src.ip: события
+    находились, адреса — нет. Сводим по адресам сами.
+    """
+    _, request = _search(monkeypatch, {"totalCount": 0, "events": []})
+    body = json.loads(request.data.decode())
+    assert body["filter"]["groupBy"] == []
+    assert body["filter"]["aggregateBy"] == []
+
+
+def test_search_asks_for_the_other_address_fields_too(monkeypatch):
+    """select — это проекция; лишние адресные колонки ничего не стоят."""
+    _, request = _search(monkeypatch, {"totalCount": 0, "events": []})
+    select = json.loads(request.data.decode())["filter"]["select"]
+    assert select[0] == "dst.host"          # настроенное поле — первым
+    assert "src.ip" in select and "src.host" in select
+    # Но всю таксономию не тянем: на сотнях доменов это мегабайты.
+    assert len(select) < 40
 
 
 def test_search_reports_truncation_at_the_limit(monkeypatch):
@@ -437,3 +459,77 @@ def test_address_shape_check():
     assert siem_client._looks_like_address("fe80::1")
     assert not siem_client._looks_like_address("")
     assert not siem_client._looks_like_address("Вход выполнен успешно")
+
+
+# --- пара событий DNS-сервера ---------------------------------------------
+#
+# Один DNS-запрос порождает два события: сервер принял запрос от станции
+# (action=receive, адрес станции в src.ip) и переслал его вышестоящему
+# резолверу (action=send, src.ip пуст, в dst.ip внешний адрес).
+
+DNS_RECEIVE = {
+    "action": "receive", "src.ip": "10.61.50.40", "src.host": "10.61.50.40",
+    "dst.ip": None, "dst.host": None, "event_src.host": "10.12.7.3",
+    "recv_ipv4": "10.12.7.3", "datafield3": "autodesk.com",
+    "datafield6": "update.delivery.autodesk.com",
+    "object.value": "update.delivery.autodesk.com",
+    "taxonomy_version": "27.0.859-release-27.0",
+    "time": "2026-08-11T02:39:26Z", "_meta": {"id": "de53487a"},
+}
+DNS_SEND = dict(DNS_RECEIVE, action="send", **{
+    "src.ip": None, "src.host": None,
+    "dst.ip": "109.233.224.100", "dst.host": "109.233.224.100",
+})
+DNS_ROWS = [
+    DNS_RECEIVE, DNS_SEND, DNS_RECEIVE, DNS_SEND,
+    dict(DNS_RECEIVE, **{"src.ip": "10.83.67.40", "src.host": "10.83.67.40"}),
+    dict(DNS_RECEIVE, **{"src.ip": "10.170.9.214", "src.host": "10.170.9.214"}),
+]
+DNS_FILTER = 'datafield1 = "autodesk.com" or datafield3 = "autodesk.com"'
+
+
+def test_events_without_the_address_are_skipped_not_fatal():
+    """Событие send адреса станции не несёт — оно просто пропускается.
+
+    Раньше именно такое событие SIEM выбирал представителем группы, и
+    поиск не находил ни одного хоста при непустом числе событий.
+    """
+    hosts = siem_client._parse_group_rows({"events": DNS_ROWS}, "src.ip")
+    assert [(h.address, h.events_count) for h in hosts] == [
+        ("10.61.50.40", 2), ("10.170.9.214", 1), ("10.83.67.40", 1)
+    ]
+
+
+def test_external_resolver_is_marked_as_such():
+    """dst.ip в этих событиях — вышестоящий DNS, а не рабочая станция."""
+    found = {i["field"]: i["kind"] for i in siem_client._address_candidates(
+        DNS_ROWS, ["src.ip"], DNS_FILTER, "autodesk.com")}
+    assert found["dst.ip"] == "внешний адрес"
+    assert found["event_src.host"] == "внутренний адрес"
+
+
+def test_internal_addresses_come_before_external_ones():
+    kinds = [i["kind"] for i in siem_client._address_candidates(
+        DNS_ROWS, ["src.ip"], DNS_FILTER, "autodesk.com")]
+    assert kinds.index("внутренний адрес") < kinds.index("внешний адрес")
+
+
+def test_version_strings_are_not_offered_as_addresses():
+    """taxonomy_version выглядит как имя узла, но адресом не является."""
+    names = [i["field"] for i in siem_client._address_candidates(
+        DNS_ROWS, ["src.ip"], DNS_FILTER, "autodesk.com")]
+    assert "taxonomy_version" not in names
+
+
+def test_fields_holding_the_queried_domain_are_not_offered():
+    """В datafield6 и object.value лежит само запрошенное имя."""
+    names = [i["field"] for i in siem_client._address_candidates(
+        DNS_ROWS, ["src.ip"], DNS_FILTER, "autodesk.com")]
+    assert "datafield6" not in names and "object.value" not in names
+
+
+def test_address_kind_recognises_private_and_public():
+    assert siem_client._address_kind("10.61.50.40") == "внутренний адрес"
+    assert siem_client._address_kind("192.168.1.1") == "внутренний адрес"
+    assert siem_client._address_kind("109.233.224.100") == "внешний адрес"
+    assert siem_client._address_kind("wks-buh-07") == "имя узла"

@@ -495,7 +495,7 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
                     # Постранично ответ не дочитывается, поэтому молчать об
                     # этом нельзя: часть хостов могла не попасть в выборку.
                     log.message += (
-                        f" Ответ упёрся в предел {config.limit} строк — "
+                        f" Ответ упёрся в предел {config.limit} событий — "
                         "часть хостов могла не войти; сузьте окно поиска "
                         "или увеличьте предел в настройках."
                     )
@@ -512,7 +512,7 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
             summary += f" Не удалось проверить: {failed}. {first_error}"
         if truncated_for:
             summary += (
-                f" Ответ SIEM усечён по пределу {config.limit} строк "
+                f" Ответ SIEM усечён по пределу {config.limit} событий "
                 f"для доменов: {', '.join(truncated_for[:5])}."
             )
         if not found and not failed:
