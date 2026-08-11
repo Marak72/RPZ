@@ -342,3 +342,98 @@ def test_generated_aggregate_column_is_counted():
     """Колонку агрегата SIEM называет по самой функции — COUNT(src.ip)."""
     payload = {"events": [{"src.ip": "10.0.0.1", "COUNT(src.ip)": 42}]}
     assert siem_client._parse_group_rows(payload, "src.ip")[0].events_count == 42
+
+
+# --- диагностика: где в событии лежит адрес --------------------------------
+
+#: Строка ровно того вида, что приходит с боевого SIEM: событие целиком,
+#: со служебным _meta, и с незаполненным src.ip.
+REAL_META = {
+    "id": "de5348fc-952d-11f1-9323-005056a7e62f",
+    "time": "2026-08-11T02:39:26.1260000Z",
+    "assetIds": None,
+    "site_alias": "unknown site_id=null",
+    "site_is_deleted": True,
+}
+REAL_ROWS = [
+    {"src.ip": None, "dst.ip": "10.14.2.51", "dst.host": "wks-buh-07",
+     "datafield1": "autodesk.com", "datafield3": None,
+     "event_src.host": "skydns-gw", "src.port": None,
+     "time": "2026-08-11T02:39:26.1260000Z", "_meta": REAL_META},
+    {"src.ip": None, "dst.ip": "10.14.2.60", "dst.host": None,
+     "datafield1": "autodesk.com", "datafield3": None,
+     "event_src.host": "skydns-gw",
+     "time": "2026-08-11T02:38:54.8630000Z", "_meta": REAL_META},
+]
+REAL_FILTER = 'datafield1 = "autodesk.com" or datafield3 = "autodesk.com"'
+
+
+def test_filled_fields_ignores_empty_values_and_meta():
+    filled = {item["field"]: item for item in siem_client._filled_fields(REAL_ROWS)}
+    assert "src.ip" not in filled       # null
+    assert "src.port" not in filled     # null
+    assert "_meta" not in filled        # служебное
+    assert filled["dst.ip"]["rows"] == 2
+    assert filled["dst.host"]["rows"] == 1
+    assert filled["dst.ip"]["sample"] == "10.14.2.51"
+
+
+def test_filled_fields_are_sorted_by_how_often_they_are_filled():
+    names = [item["field"] for item in siem_client._filled_fields(REAL_ROWS)]
+    assert names.index("dst.ip") < names.index("dst.host")
+
+
+def test_candidates_offer_fields_that_look_like_an_address():
+    names = [item["field"]
+             for item in siem_client._address_candidates(
+                 REAL_ROWS, ["src.ip"], REAL_FILTER)]
+    assert "dst.ip" in names and "dst.host" in names
+
+
+def test_candidates_skip_the_fields_from_the_filter():
+    """В datafield1 лежит проверяемый домен — он тоже похож на имя узла."""
+    names = [item["field"]
+             for item in siem_client._address_candidates(
+                 REAL_ROWS, ["src.ip"], REAL_FILTER)]
+    assert "datafield1" not in names
+
+
+def test_candidates_skip_time_and_the_configured_field():
+    names = [item["field"]
+             for item in siem_client._address_candidates(
+                 REAL_ROWS, ["dst.ip"], REAL_FILTER)]
+    assert "time" not in names and "dst.ip" not in names
+
+
+def test_real_response_yields_no_hosts_by_src_ip():
+    """Именно это и происходило: события есть, а поле пустое."""
+    payload = {"totalCount": 22, "events": REAL_ROWS}
+    assert siem_client._parse_group_rows(payload, "src.ip") == []
+
+
+def test_switching_the_field_recovers_the_hosts():
+    payload = {"totalCount": 22, "events": REAL_ROWS}
+    hosts = siem_client._parse_group_rows(payload, "dst.ip, dst.host")
+    assert [h.address for h in hosts] == ["10.14.2.51", "10.14.2.60"]
+
+
+def test_probe_query_asks_for_everything_and_does_not_group():
+    """Диагностика видит поля, только если запросила их в select."""
+    body = siem_client._build_group_query(
+        query_filter=REAL_FILTER, group_field="src.ip",
+        time_from=TIME_FROM, time_to=TIME_TO,
+        select=list(siem_client.TAXONOMY_FIELDS), group_by=[],
+    )
+    assert "dst.ip" in body["filter"]["select"]
+    assert len(body["filter"]["select"]) > 150
+    assert body["filter"]["groupBy"] == []
+    # Без группировки агрегат не имеет смысла и SIEM его не ждёт.
+    assert body["filter"]["aggregateBy"] == []
+
+
+def test_address_shape_check():
+    assert siem_client._looks_like_address("10.14.2.51")
+    assert siem_client._looks_like_address("wks-buh-07")
+    assert siem_client._looks_like_address("fe80::1")
+    assert not siem_client._looks_like_address("")
+    assert not siem_client._looks_like_address("Вход выполнен успешно")

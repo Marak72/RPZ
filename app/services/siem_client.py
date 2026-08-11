@@ -60,6 +60,70 @@ AUTH_TYPE_LDAP = 1
 TOKEN_SCOPE = "authorization offline_access mpx.api ptkb.api"
 DEFAULT_CLIENT_ID = "mpx"
 
+# Полный набор полей таксономии MaxPatrol SIEM (тот же список, что подставляет
+# официальная обёртка mpsiem_api). Нужен диагностике: SIEM возвращает ровно те
+# поля, которые перечислены в select, поэтому увидеть, где в событии лежит
+# адрес конечного хоста, можно только запросив всё сразу.
+TAXONOMY_FIELDS = (
+    "action", "agent_id", "aggregation_name", "asset_ids",
+    "assigned_dst_host", "assigned_dst_ip", "assigned_dst_port",
+    "assigned_src_host", "assigned_src_ip", "assigned_src_port",
+    "category.generic", "category.high", "category.low", "chain_id",
+    "correlation_name", "correlation_type", "count", "count.bytes",
+    "count.bytes_in", "count.bytes_out", "count.packets",
+    "count.packets_in", "count.packets_out", "count.subevents",
+    "datafield1", "datafield10", "datafield2", "datafield3", "datafield4",
+    "datafield5", "datafield6", "datafield7", "datafield8", "datafield9",
+    "detect", "direction", "dst.asset", "dst.fqdn", "dst.geo.asn",
+    "dst.geo.city", "dst.geo.country", "dst.geo.org", "dst.host",
+    "dst.hostname", "dst.ip", "dst.mac", "dst.port", "duration",
+    "event_src.asset", "event_src.category", "event_src.fqdn",
+    "event_src.host", "event_src.hostname", "event_src.id", "event_src.ip",
+    "event_src.subsys", "event_src.title", "event_src.vendor", "event_type",
+    "external_link", "generator", "generator.type", "generator.version",
+    "historical", "id", "importance", "incorrect_time", "input_id",
+    "interface", "job_id", "logon_auth_method", "logon_service",
+    "logon_type", "mime", "msgid", "nas_fqdn", "nas_ip", "normalized",
+    "object", "object.account.contact", "object.account.dn",
+    "object.account.domain", "object.account.fullname",
+    "object.account.group", "object.account.id", "object.account.name",
+    "object.account.privileges", "object.account.session_id",
+    "object.domain", "object.fullpath", "object.group", "object.hash",
+    "object.id", "object.name", "object.path", "object.process.cmdline",
+    "object.process.cwd", "object.process.fullpath", "object.process.guid",
+    "object.process.hash", "object.process.id", "object.process.meta",
+    "object.process.name", "object.process.original_name",
+    "object.process.parent.cmdline", "object.process.parent.fullpath",
+    "object.process.parent.guid", "object.process.parent.hash",
+    "object.process.parent.id", "object.process.parent.name",
+    "object.process.parent.path", "object.process.path",
+    "object.process.version", "object.property", "object.query",
+    "object.state", "object.type", "object.value", "object.vendor",
+    "object.version", "original_time", "protocol", "protocol.layer7",
+    "reason", "recv_asset", "recv_host", "recv_ipv4", "recv_ipv6",
+    "recv_time", "remote", "scope_id", "siem_id", "site_address",
+    "site_alias", "site_id", "site_name", "src.asset", "src.fqdn",
+    "src.geo.asn", "src.geo.city", "src.geo.country", "src.geo.org",
+    "src.host", "src.hostname", "src.ip", "src.mac", "src.port",
+    "start_time", "status", "subevents", "subject",
+    "subject.account.contact", "subject.account.dn",
+    "subject.account.domain", "subject.account.fullname",
+    "subject.account.group", "subject.account.id", "subject.account.name",
+    "subject.account.privileges", "subject.account.session_id",
+    "subject.domain", "subject.group", "subject.id", "subject.name",
+    "subject.privileges", "subject.process.cmdline", "subject.process.cwd",
+    "subject.process.fullpath", "subject.process.guid",
+    "subject.process.hash", "subject.process.id", "subject.process.meta",
+    "subject.process.name", "subject.process.original_name",
+    "subject.process.parent.cmdline", "subject.process.parent.fullpath",
+    "subject.process.parent.guid", "subject.process.parent.hash",
+    "subject.process.parent.id", "subject.process.parent.name",
+    "subject.process.parent.path", "subject.process.path",
+    "subject.process.version", "subject.state", "subject.type",
+    "subject.version", "tag", "task_id", "taxonomy_version", "tcp_flag",
+    "tenant_id", "text", "time", "type", "uuid"
+)
+
 USER_AGENT = "rpz-portal/1.0"
 
 
@@ -417,32 +481,44 @@ class SiemClient:
         group_field: str,
         limit: int = 20,
     ) -> dict:
-        """Диагностика: что мы отправили и что SIEM ответил дословно.
+        """Диагностика: какие поля events на самом деле заполнены.
 
         Когда поиск возвращает ноль хостов, вопрос всегда один: событий не
-        нашлось вовсе или они пришли, но значение группировки лежит не там,
-        где мы его ищем. По журналу этого не видно, поэтому показываем сырой
-        запрос и сырой ответ — по ним настройка правится за один заход.
+        нашлось вовсе или они нашлись, но адрес конечного хоста лежит не в
+        том поле, которое мы читаем.
+
+        Ключевая деталь: SIEM возвращает ровно те поля, которые перечислены
+        в ``select``. Спрашивая только настроенное поле, увидеть остальные
+        невозможно, поэтому здесь запрашивается вся таксономия, а группировка
+        не запрашивается вовсе — нужны сырые события, чтобы разглядеть, где
+        в них адрес.
         """
         fields = _group_fields(group_field)
         query_filter = _render_filter(filter_template, (domain or "").strip().lower())
         body = _build_group_query(
             query_filter=query_filter, group_field=fields,
             time_from=time_from, time_to=time_to,
+            select=list(TAXONOMY_FIELDS), group_by=[],
         )
         payload = self._events(body, limit)
         rows = _response_rows(payload)
+
+        # В показанном запросе select заменяем меткой: две сотни имён полей
+        # заслонили бы то, ради чего на него смотрят, — фильтр и период.
+        shown = json.loads(json.dumps(body))
+        shown["filter"]["select"] = [f"<вся таксономия: {len(TAXONOMY_FIELDS)} полей>"]
+
         return {
-            "request": body,
+            "request": shown,
             "filter": query_filter,
             "group_fields": fields,
             "total_count": payload.get("totalCount"),
             "rows_returned": len(rows),
-            # Ключи первой строки — по ним сразу видно, как SIEM назвал
-            # поле группировки и счётчик в этой инсталляции.
             "row_keys": sorted(rows[0].keys()) if rows and isinstance(rows[0], dict)
                         else [],
-            "rows": rows[:5],
+            "filled": _filled_fields(rows),
+            "suggested": _address_candidates(rows, fields, query_filter),
+            "rows": rows[:3],
             "parsed": [
                 {"address": h.address, "events": h.events_count}
                 for h in _parse_group_rows(payload, fields)
@@ -494,18 +570,29 @@ def _build_group_query(
     group_field,
     time_from: datetime,
     time_to: datetime,
+    select: list[str] | None = None,
+    group_by: list[str] | None = None,
 ) -> dict:
-    """Тело запроса ``/api/events/v2/events`` с группировкой и подсчётом."""
+    """Тело запроса ``/api/events/v2/events`` с группировкой и подсчётом.
+
+    ``groupBy`` отправляется, но полагаться на него нельзя: в наблюдаемой
+    инсталляции SIEM возвращает обычные события, а не готовые группы.
+    Поэтому сведение по адресам всё равно делается на нашей стороне
+    (см. :func:`_parse_group_rows`) — так работает и там, где группировка
+    отрабатывает, и там, где нет.
+    """
     fields = _group_fields(group_field)
+    grouping = fields if group_by is None else group_by
     return {
         "filter": {
-            "select": fields + ["time"],
+            "select": select if select is not None else fields + ["time"],
             "where": query_filter,
             "orderBy": [{"field": "time", "sortOrder": "descending"}],
-            "groupBy": fields,
-            "aggregateBy": [
-                {"function": "COUNT", "field": fields[0], "unique": False}
-            ],
+            "groupBy": grouping,
+            "aggregateBy": (
+                [{"function": "COUNT", "field": fields[0], "unique": False}]
+                if grouping else []
+            ),
             "distributeBy": [],
             "top": None,
             "aliases": {},
@@ -618,6 +705,77 @@ def _row_count(row: dict) -> int:
                     if isinstance(first.get(sub), (int, float)):
                         return int(first[sub])
     return 1
+
+
+#: Поля, которые адресом конечного хоста быть не могут, как бы они ни
+#: выглядели: служебные метки события и его собственное время.
+_NOT_ADDRESS = {"time", "_meta", "recv_time", "original_time", "start_time",
+                "id", "uuid", "siem_id", "input_id", "job_id", "task_id",
+                "chain_id", "agent_id", "scope_id", "tenant_id", "site_id"}
+
+#: Похоже на IPv4/IPv6 либо на имя узла (без пробелов, с точкой или дефисом).
+_IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+_IPV6 = re.compile(r"^[0-9a-fA-F:]{3,45}$")
+_HOSTNAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{1,62})$")
+
+
+def _is_empty(value) -> bool:
+    """Пустое значение поля события во всех видах, в которых оно приходит."""
+    return value in (None, "", "null", "None", [], {})
+
+
+def _filled_fields(rows: list) -> list[dict]:
+    """Какие поля реально заполнены в найденных событиях.
+
+    Ради этого списка диагностика и существует: он показывает, что у события
+    есть на самом деле, вместо того чтобы гадать имя поля по документации.
+    Отсортирован по частоте заполнения — сверху то, что есть почти везде.
+    """
+    counts: dict[str, int] = {}
+    samples: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for name, value in row.items():
+            if name == "_meta" or _is_empty(value):
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            if name not in samples:
+                samples[name] = str(value)[:120]
+    return [
+        {"field": name, "rows": counts[name], "sample": samples[name]}
+        for name in sorted(counts, key=lambda n: (-counts[n], n))
+    ]
+
+
+def _looks_like_address(value: str) -> bool:
+    text = str(value).strip()
+    if not text or " " in text:
+        return False
+    if _IPV4.match(text):
+        return True
+    if ":" in text and _IPV6.match(text):
+        return True
+    return bool(_HOSTNAME.match(text)) and ("." in text or "-" in text)
+
+
+def _address_candidates(rows: list, configured: list[str],
+                        query_filter: str = "") -> list[dict]:
+    """Поля, которые похожи на адрес конечного хоста.
+
+    Оператору не обязательно знать таксономию SIEM наизусть: если значение
+    выглядит как IP-адрес или имя узла, поле стоит предложить как замену
+    настроенному.
+
+    Поля из самого фильтра отбрасываются: в них лежит проверяемый домен, а
+    он тоже выглядит как имя узла — и возглавил бы список подсказок.
+    """
+    skip = set(configured) | _NOT_ADDRESS
+    skip |= set(re.findall(r"[A-Za-z_][\w.]*", query_filter or ""))
+    return [
+        item for item in _filled_fields(rows)
+        if item["field"] not in skip and _looks_like_address(item["sample"])
+    ][:12]
 
 
 def _count_keys(row: dict) -> list[str]:

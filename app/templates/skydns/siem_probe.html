@@ -59,13 +59,45 @@
     а в самом запросе: не тот фильтр или не тот период. Вставьте фильтр из
     карточки ниже в интерфейс SIEM и сравните результат руками.
     {% else %}
-    <b>Строки пришли, но адрес из них не достаётся.</b> Значит, поле
-    группировки в этой инсталляции называется иначе. Посмотрите ключи строки
-    ниже и укажите нужное имя в настройках — их можно перечислить через
-    запятую, адрес возьмётся из первого заполненного.
+    <b>События нашлись, но поле
+    <code>{{ report.group_fields|join(', ') }}</code> в них пустое.</b>
+    Ниже перечислены поля, которые в этих событиях действительно заполнены.
+    Выберите то, где лежит адрес конечного хоста, и впишите его в настройках
+    (поле «Поле группировки»). Можно указать несколько через запятую — адрес
+    возьмётся из первого заполненного.
     {% endif %}
   </div>
 </div>
+
+{% if report.suggested %}
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('check-circle') }}<span class="card__title">Похоже на адрес хоста</span>
+  </div>
+  <div class="card__body">
+    <p class="help">Значения этих полей выглядят как IP-адрес или имя узла.
+      Скопируйте подходящее имя в настройку «Поле группировки».</p>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Поле</th><th class="num">Заполнено строк</th>
+                   <th>Пример значения</th></tr></thead>
+        <tbody>
+          {% for item in report.suggested %}
+          <tr>
+            <td class="value">{{ item.field }}
+              <button type="button" class="copy-btn" data-copy="{{ item.field }}"
+                      title="Скопировать имя поля">{{ ico.icon('copy', 'icon icon-sm') }}</button>
+            </td>
+            <td class="num">{{ item.rows }} из {{ report.rows_returned }}</td>
+            <td class="mono">{{ item.sample }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <div class="grid grid--2 mt-2">
   <div class="card">
@@ -75,28 +107,36 @@
     <div class="card__body">
       <div class="kv">
         <dt>Фильтр</dt><dd class="mono">{{ report.filter }}</dd>
-        <dt>Группировка</dt><dd class="mono">{{ report.group_fields|join(', ') }}</dd>
+        <dt>Ищем адрес в</dt><dd class="mono">{{ report.group_fields|join(', ') }}</dd>
       </div>
+      <p class="help">Диагностика запрашивает все поля таксономии и не просит
+        группировку: нужны сырые события, чтобы разглядеть, где в них адрес.
+        Обычный поиск шлёт тот же фильтр, но с коротким списком полей.</p>
     </div>
   </div>
 
   <div class="card">
     <div class="card__header">
-      {{ ico.icon('hash') }}<span class="card__title">Ключи строки ответа</span>
+      {{ ico.icon('hash') }}<span class="card__title">Все заполненные поля</span>
     </div>
-    <div class="card__body">
-      {% if report.row_keys %}
-      <p class="help">Так SIEM назвал колонки. Зелёным — то, что портал ищет
-        сейчас; если адрес лежит в другой колонке, впишите её имя в настройки.</p>
-      <div class="inline">
-        {% for key in report.row_keys %}
-        <span class="badge {% if key in report.group_fields %}badge--success{% else %}badge--neutral{% endif %}">{{ key }}</span>
-        {% endfor %}
-      </div>
+    <div class="card__body card__body--flush">
+      {% if report.filled %}
+      <table class="table">
+        <thead><tr><th>Поле</th><th class="num">Строк</th><th>Пример</th></tr></thead>
+        <tbody>
+          {% for item in report.filled %}
+          <tr class="{% if item.field in report.group_fields %}is-selected{% endif %}">
+            <td class="value">{{ item.field }}</td>
+            <td class="num">{{ item.rows }}</td>
+            <td class="mono">{{ item.sample }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
       {% else %}
       <div class="empty">
-        <div class="empty__title">Строк нет</div>
-        <div class="empty__text">Показывать нечего — ответ пустой.</div>
+        <div class="empty__title">Заполненных полей нет</div>
+        <div class="empty__text">События пришли пустыми — показывать нечего.</div>
       </div>
       {% endif %}
     </div>
