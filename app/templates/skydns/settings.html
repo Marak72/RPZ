@@ -215,6 +215,14 @@
             в журнале.</div>
         </div>
         <div class="field">
+          {{ siem_form.chunk.label(class="label") }}
+          {{ siem_form.chunk() }}
+          <div class="help">Условия по доменам объединяются в один фильтр
+            через <code>or</code>, события раскладываются обратно порталом.
+            Так тысяча доменов проверяется полусотней запросов, а не тысячей.
+            <b>1</b> — прежнее поведение, отдельный запрос на домен.</div>
+        </div>
+        <div class="field">
           {{ siem_form.timeout.label(class="label") }}
           {{ siem_form.timeout() }}
           <div class="help">Сгруппированный запрос за большое окно SIEM считает

@@ -35,6 +35,7 @@ class FakeSiemClient:
         self.config = config
         self.closed = False
         self.searched = []
+        self.batches = []
         FakeSiemClient.instances.append(self)
 
     login_error = None
@@ -45,15 +46,28 @@ class FakeSiemClient:
         if FakeSiemClient.login_error:
             raise SiemError(FakeSiemClient.login_error)
 
+    def _result(self, domain, filter_template):
+        return SearchResult(
+            hosts=[HostHit(address=a, events_count=c) for a, c in FakeSiemClient.hits],
+            total_count=sum(c for _, c in FakeSiemClient.hits),
+            events_read=sum(c for _, c in FakeSiemClient.hits),
+            query_filter=filter_template.replace("{domain}", domain),
+        )
+
     def search_hosts(self, domain, time_from, time_to, filter_template, group_field):
         self.searched.append(domain)
         if FakeSiemClient.search_error:
             raise SiemError(FakeSiemClient.search_error)
-        return SearchResult(
-            hosts=[HostHit(address=a, events_count=c) for a, c in FakeSiemClient.hits],
-            total_count=sum(c for _, c in FakeSiemClient.hits),
-            query_filter=filter_template.replace("{domain}", domain),
-        )
+        return self._result(domain, filter_template)
+
+    def search_many(self, domains, time_from, time_to, filter_template,
+                    group_field, limit=None):
+        """Пачка доменов одним запросом — так работает боевой клиент."""
+        self.searched.extend(domains)
+        self.batches.append(list(domains))
+        if FakeSiemClient.search_error:
+            raise SiemError(FakeSiemClient.search_error)
+        return {d: self._result(d, filter_template) for d in domains}
 
     def close(self):
         self.closed = True
@@ -807,3 +821,68 @@ def test_vt_failure_is_recorded_not_lost(client, monkeypatch):
     client.post(f"/skydns/domains/{threat_id}/vt", follow_redirects=True)
 
     assert "не задан" in VtReport.query.filter_by(value="evil.ru").one().error
+
+
+# --- пачки доменов в SIEM -------------------------------------------------
+
+def test_domains_go_to_siem_in_batches(client):
+    """Не по одному запросу на домен: на длинном списке это часы."""
+    from app.settings_store import KEY_SIEM_CHUNK, set_setting
+
+    set_setting(KEY_SIEM_CHUNK, "3")
+    db.session.commit()
+    for i in range(7):
+        _add_threat(f"evil{i}.ru")
+
+    client.post("/skydns/lookup-batch")
+
+    batches = FakeSiemClient.instances[0].batches
+    assert [len(b) for b in batches] == [3, 3, 1]
+    assert len({d for b in batches for d in b}) == 7
+
+
+def test_chunk_of_one_keeps_the_old_behaviour(client):
+    from app.settings_store import KEY_SIEM_CHUNK, set_setting
+
+    set_setting(KEY_SIEM_CHUNK, "1")
+    db.session.commit()
+    _add_threat("a.ru")
+    _add_threat("b.ru")
+
+    client.post("/skydns/lookup-batch")
+    assert [len(b) for b in FakeSiemClient.instances[0].batches] == [1, 1]
+
+
+def test_every_domain_of_a_batch_gets_its_own_log(client):
+    """Журнал ведётся по доменам, хотя запрос был общий."""
+    _add_threat("a.ru")
+    _add_threat("b.ru")
+    client.post("/skydns/lookup-batch")
+
+    logs = {log.domain: log for log in SiemQueryLog.query.all()}
+    assert set(logs) == {"a.ru", "b.ru"}
+    assert all(log.status == "success" for log in logs.values())
+
+
+def test_batch_failure_is_recorded_for_every_domain_in_it(client):
+    """Запрос был общий — значит, и ошибка общая для всей пачки."""
+    FakeSiemClient.search_error = "SIEM вернул ошибку 500."
+    _add_threat("a.ru")
+    _add_threat("b.ru")
+    client.post("/skydns/lookup-batch")
+
+    logs = SiemQueryLog.query.all()
+    assert len(logs) == 2
+    assert all(log.status == "failed" for log in logs)
+    assert all(t.siem_checked_at is None for t in ThreatDomain.query.all())
+
+
+def test_no_cap_on_the_number_of_domains(client):
+    """Прежний предел в 200 доменов за раз снят."""
+    for i in range(250):
+        _add_threat(f"evil{i}.ru")
+    client.post("/skydns/lookup-batch")
+
+    assert ThreatDomain.query.filter(
+        ThreatDomain.siem_checked_at.is_(None)
+    ).count() == 0

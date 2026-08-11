@@ -55,12 +55,13 @@ from ..services import skydns_client
 from ..services.exclusions import Matcher, apply_rule
 from ..services.jobs import JobError, active_job
 from ..services.jobs import start as start_job
-from ..services.siem_client import SiemClient, SiemError
+from ..services.siem_client import SearchResult, SiemClient, SiemError
 from ..services.vt_store import check_and_store, check_many
 from ..services.skydns_client import SkydnsClient, SkydnsError
 from ..settings_store import (
     DEFAULT_SIEM_FILTER,
     DEFAULT_SIEM_GROUP_FIELD,
+    DEFAULT_SIEM_CHUNK,
     DEFAULT_SIEM_MAX_EVENTS,
     DEFAULT_SIEM_TIMEOUT,
     DEFAULT_SKYDNS_LIMIT,
@@ -71,6 +72,7 @@ from ..settings_store import (
     KEY_SIEM_CLIENT_SECRET,
     KEY_SIEM_FILTER,
     KEY_SIEM_GROUP_FIELD,
+    KEY_SIEM_CHUNK,
     KEY_SIEM_MAX_EVENTS,
     KEY_SIEM_PASSWORD,
     KEY_SIEM_TIMEOUT,
@@ -123,11 +125,6 @@ skydns_bp.before_request(service_guard("skydns"))
 PER_PAGE = 100
 DEFAULT_WINDOW_HOURS = 24 * 7
 DEFAULT_SYNC_DAYS = 1
-# Сколько доменов разрешаем обработать за один пакетный поиск в SIEM.
-# Раньше предел был 25: поиск шёл прямо в обработчике запроса и длинная пачка
-# упиралась в таймаут веб-сервера. Теперь работа идёт в фоне, и ограничение
-# нужно только чтобы одно задание не растянулось на полдня.
-BATCH_LIMIT = 200
 # Сколько строк детализации забираем за одну выгрузку: из них строится
 # соответствие «домен → устройство».
 DEFAULT_DETAIL_LIMIT = 5000
@@ -646,19 +643,22 @@ def _apply_hits(threat: ThreatDomain, hits) -> int:
 
 
 def _lookup_worker(threat_ids: list[int], user_id: int):
-    """Собрать исполнителя фонового поиска по списку доменов.
+    """Собрать исполнителя фонового поиска конечных хостов.
 
-    Возвращает функцию для :mod:`app.services.jobs`: она получает ручку
-    задания и отчитывается о ходе работы после каждого домена. Внутри — та
-    же логика, что раньше выполнялась в обработчике запроса, но результат
-    коммитится по одному домену: оператор видит найденные хосты сразу,
-    не дожидаясь конца всей пачки.
+    Домены обрабатываются пачками: условия по ним объединяются в один
+    фильтр через ``or``, события читаются одним запросом и раскладываются
+    обратно по доменам. На тысяче имён это разница между одним запросом на
+    каждое имя (часы) и полусотней запросов (минуты).
+
+    Размер пачки настраивается; единица возвращает прежнее поведение —
+    отдельный запрос на домен.
     """
 
     def work(handle) -> str:
         config = load_siem_config()
         filter_template = get_siem_filter_template()
         group_field = get_siem_group_field()
+        chunk_size = max(1, get_int(KEY_SIEM_CHUNK, DEFAULT_SIEM_CHUNK))
         time_from, time_to = _window()
 
         done = failed = found = 0
@@ -682,61 +682,87 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
             client.close()
             raise JobError(str(exc)) from exc
 
+        processed = 0
         try:
-            for index, threat_id in enumerate(threat_ids, start=1):
-                threat = db.session.get(ThreatDomain, threat_id)
-                if threat is None:
+            for chunk in _chunks(threat_ids, chunk_size):
+                threats = [db.session.get(ThreatDomain, tid) for tid in chunk]
+                threats = [t for t in threats if t is not None]
+                if not threats:
                     continue
-                handle.progress(processed=index - 1,
-                                detail=f"Ищу {threat.domain}")
 
-                log = SiemQueryLog(
-                    threat_id=threat.id, domain=threat.domain,
-                    period_from=time_from, period_to=time_to, user_id=user_id,
-                )
-                db.session.add(log)
+                names = ", ".join(t.domain for t in threats[:2])
+                if len(threats) > 2:
+                    names += f" и ещё {len(threats) - 2}"
+                handle.progress(processed=processed, detail=f"Ищу {names}")
+
+                logs = {}
+                for threat in threats:
+                    log = SiemQueryLog(
+                        threat_id=threat.id, domain=threat.domain,
+                        period_from=time_from, period_to=time_to,
+                        user_id=user_id,
+                    )
+                    db.session.add(log)
+                    logs[threat.domain] = log
+
                 try:
-                    result = client.search_hosts(
-                        threat.domain, time_from, time_to,
+                    results = client.search_many(
+                        [t.domain for t in threats], time_from, time_to,
                         filter_template, group_field,
                     )
                 except SiemError as exc:
-                    log.status = JOB_FAILED
-                    log.finished_at = datetime.utcnow()
-                    log.message = str(exc)
-                    failed += 1
-                    first_error = first_error or f"{threat.domain}: {exc}"
+                    # Ошибка запроса — это ошибка всей пачки: разделить её
+                    # по доменам нечем, запрос был общий.
+                    for threat in threats:
+                        log = logs[threat.domain]
+                        log.status = JOB_FAILED
+                        log.finished_at = datetime.utcnow()
+                        log.message = str(exc)
+                        failed += 1
+                    first_error = first_error or f"{names}: {exc}"
+                    processed += len(threats)
                     db.session.commit()
-                    handle.progress(processed=index, failed=failed, found=found)
+                    handle.progress(processed=processed, failed=failed,
+                                    found=found)
                     continue
 
-                db.session.flush()  # закрепить журнал до вставки хостов
-                total_hosts = _apply_hits(threat, result.hosts)
-                threat.siem_checked_at = datetime.utcnow()
-                threat.siem_hosts_count = total_hosts
-                found += len(result.hosts)
+                db.session.flush()  # закрепить журналы до вставки хостов
+                for threat in threats:
+                    result = results.get(threat.domain)
+                    log = logs[threat.domain]
+                    if result is None:
+                        result = SearchResult(
+                            query_filter=filter_template.replace(
+                                "{domain}", threat.domain)
+                        )
 
-                log.status = JOB_SUCCESS
-                log.finished_at = datetime.utcnow()
-                log.hosts_found = len(result.hosts)
-                log.events_total = result.total_count
-                log.query_filter = result.query_filter
-                log.message = (
-                    f"Найдено хостов: {len(result.hosts)}; событий прочитано: "
-                    f"{result.events_read} из {result.total_count}."
-                )
-                if result.truncated:
-                    # Постранично ответ не дочитывается, поэтому молчать об
-                    # этом нельзя: часть хостов могла не попасть в выборку.
-                    log.message += (
-                        f" Дочитано не всё: предел {config.limit} событий "
-                        "на домен. Часть хостов могла не войти — сузьте окно "
-                        "поиска или поднимите предел в настройках."
+                    total_hosts = _apply_hits(threat, result.hosts)
+                    threat.siem_checked_at = datetime.utcnow()
+                    threat.siem_hosts_count = total_hosts
+                    found += len(result.hosts)
+
+                    log.status = JOB_SUCCESS
+                    log.finished_at = datetime.utcnow()
+                    log.hosts_found = len(result.hosts)
+                    log.events_total = result.total_count
+                    log.query_filter = result.query_filter
+                    log.message = (
+                        f"Найдено хостов: {len(result.hosts)}; "
+                        f"событий по этому домену: {result.events_read}."
                     )
-                    truncated_for.append(threat.domain)
-                done += 1
+                    if result.truncated:
+                        log.message += (
+                            f" Дочитано не всё: предел {config.limit} событий "
+                            "на запрос. Часть хостов могла не войти — сузьте "
+                            "окно поиска, уменьшите размер пачки или поднимите "
+                            "предел в настройках."
+                        )
+                        truncated_for.append(threat.domain)
+                    done += 1
+
+                processed += len(threats)
                 db.session.commit()
-                handle.progress(processed=index, failed=failed, found=found)
+                handle.progress(processed=processed, failed=failed, found=found)
         finally:
             client.close()
             db.session.commit()
@@ -760,6 +786,11 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
         return summary
 
     return work
+
+
+def _chunks(items: list, size: int):
+    for start in range(0, len(items), size):
+        yield items[start:start + size]
 
 
 def _start_lookup(threats: list[ThreatDomain], back_url: str):
@@ -813,25 +844,18 @@ def lookup_batch():
     if ids:
         threats = ThreatDomain.query.filter(ThreatDomain.id.in_(ids)).all()
     else:
+        # Без отметок берём все непроверенные — предела больше нет: домены
+        # уходят в SIEM пачками, а работа идёт в фоне.
         threats = (
             ThreatDomain.query
             .filter(ThreatDomain.siem_checked_at.is_(None))
             .order_by(ThreatDomain.last_seen.desc())
-            .limit(BATCH_LIMIT)
             .all()
         )
 
     if not threats:
         flash("Нет доменов для проверки в SIEM.", "info")
         return redirect(_back_url())
-
-    if len(threats) > BATCH_LIMIT:
-        threats = threats[:BATCH_LIMIT]
-        flash(
-            f"За один раз обрабатывается не больше {BATCH_LIMIT} доменов — "
-            "запустите проверку ещё раз для остальных.",
-            "info",
-        )
 
     return _start_lookup(threats, _back_url())
 
@@ -1581,6 +1605,7 @@ def _siem_form() -> SiemSettingsForm:
         group_field=get_setting(KEY_SIEM_GROUP_FIELD, DEFAULT_SIEM_GROUP_FIELD),
         window_hours=get_int(KEY_SIEM_WINDOW, DEFAULT_WINDOW_HOURS),
         max_events=get_int(KEY_SIEM_MAX_EVENTS, DEFAULT_SIEM_MAX_EVENTS),
+        chunk=get_int(KEY_SIEM_CHUNK, DEFAULT_SIEM_CHUNK),
         timeout=get_int(KEY_SIEM_TIMEOUT, DEFAULT_SIEM_TIMEOUT),
     )
 
@@ -1659,6 +1684,8 @@ def _save_siem(form) -> None:
         set_setting(KEY_SIEM_WINDOW, str(form.window_hours.data))
     if form.max_events.data:
         set_setting(KEY_SIEM_MAX_EVENTS, str(form.max_events.data))
+    if form.chunk.data:
+        set_setting(KEY_SIEM_CHUNK, str(form.chunk.data))
     if form.timeout.data:
         set_setting(KEY_SIEM_TIMEOUT, str(form.timeout.data))
     # Секреты перезаписываются, только если их ввели заново.

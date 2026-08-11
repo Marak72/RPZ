@@ -517,6 +517,60 @@ class SiemClient:
 
         return collected, total, len(collected) < total
 
+    def search_many(
+        self,
+        domains: list[str],
+        time_from: datetime,
+        time_to: datetime,
+        filter_template: str,
+        group_field: str,
+        limit: int | None = None,
+    ) -> dict:
+        """Найти хосты сразу по пачке доменов одним запросом.
+
+        Поиск по одному домену — это один запрос к SIEM на каждое имя, и
+        на списке в тысячу доменов время складывается в часы. Условия
+        объединяются через ``or``, события читаются один раз и раскладываются
+        обратно по доменам на нашей стороне.
+
+        Возвращает ``{домен: SearchResult}`` — по записи на каждый
+        запрошенный домен, включая те, по которым ничего не нашлось.
+        """
+        wanted = [(d or "").strip().lower() for d in domains if (d or "").strip()]
+        if not wanted:
+            return {}
+
+        fields = _group_fields(group_field)
+        query_filter = _render_filter_many(filter_template, wanted)
+        cap = limit or self.config.limit
+        name_fields = list(dict.fromkeys(
+            _filter_fields(filter_template) + list(DOMAIN_FIELDS)
+        ))
+        body = _build_group_query(
+            query_filter=query_filter,
+            group_field=fields,
+            time_from=time_from,
+            time_to=time_to,
+            select=_select_for(fields) + name_fields,
+            group_by=[],
+        )
+
+        rows, _total, truncated = self._read_all_events(body, cap)
+        by_domain = _attribute(rows, wanted, name_fields)
+
+        return {
+            domain: SearchResult(
+                hosts=_parse_group_rows({"events": found}, fields),
+                # Общий totalCount относится ко всей пачке, поэтому по
+                # домену честно показывать только его собственные события.
+                total_count=len(found),
+                events_read=len(found),
+                query_filter=_render_filter(filter_template, domain),
+                truncated=truncated,
+            )
+            for domain, found in by_domain.items()
+        }
+
     def probe(
         self,
         domain: str,
@@ -596,6 +650,72 @@ def _render_filter(template: str, domain: str) -> str:
         # Шаблон без плейсхолдера считаем готовым фильтром по этому домену.
         return template
     return template.replace("{domain}", safe)
+
+
+def _render_filter_many(template: str, domains: list[str]) -> str:
+    """Один фильтр на пачку доменов.
+
+    Собирается из тех же условий, что и для одного домена, через ``or``:
+    других операторов PDQL здесь не используется намеренно — то, что
+    ``=`` и ``or`` работают в этой инсталляции, проверено, а ``in`` нет.
+    """
+    parts = [f"({_render_filter(template, d)})" for d in domains if d]
+    return " or ".join(parts)
+
+
+#: Поля, в которых у события лежит имя запрошенного ресурса. Нужны, чтобы
+#: разложить события пачки обратно по доменам: в ответе они вперемешку.
+#: Список шире фильтра осознанно — в событиях DNS-сервера полное имя лежит
+#: в datafield6 и object.value, а в фильтре стоят datafield1/datafield3.
+DOMAIN_FIELDS = (
+    "datafield1", "datafield2", "datafield3", "datafield6",
+    "object.value", "object.name", "dst.fqdn", "src.fqdn",
+)
+
+
+def _filter_fields(template: str) -> list[str]:
+    """Имена полей, по которым идёт отбор в шаблоне фильтра."""
+    return re.findall(r"([A-Za-z_][\w.]*)\s*=", template or "")
+
+
+def _event_names(row: dict, fields) -> list[str]:
+    """Имена ресурсов, встречающиеся в событии."""
+    names = []
+    for name in fields:
+        value = row.get(name)
+        if value in (None, "", "null"):
+            continue
+        text = str(value).strip().lower().rstrip(".")
+        if text and text not in names:
+            names.append(text)
+    return names
+
+
+def _attribute(rows: list, domains: list[str], fields) -> dict:
+    """Разложить события пачки по доменам, которые их вызвали.
+
+    Совпадением считается и точное имя, и поддомен запрошенного: событие
+    про ``update.delivery.autodesk.com`` относится к домену
+    ``autodesk.com``. Если подходят несколько запрошенных доменов, событие
+    достаётся самому длинному — то есть самому конкретному.
+    """
+    wanted = sorted({d.strip().lower() for d in domains if d},
+                    key=len, reverse=True)
+    out: dict = {domain: [] for domain in wanted}
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        best = ""
+        for name in _event_names(row, fields):
+            for domain in wanted:
+                if name == domain or name.endswith("." + domain):
+                    if len(domain) > len(best):
+                        best = domain
+                    break
+        if best:
+            out[best].append(row)
+    return out
 
 
 def _group_fields(group_field) -> list[str]:

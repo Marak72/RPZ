@@ -87,6 +87,10 @@ class SiemSettingsForm(FlaskForm):
         "Максимум событий на домен",
         validators=[Optional(), NumberRange(min=100, max=500000)],
     )
+    chunk = IntegerField(
+        "Доменов в одном запросе",
+        validators=[Optional(), NumberRange(min=1, max=200)],
+    )
     timeout = IntegerField(
         "Таймаут запроса, секунд",
         validators=[Optional(), NumberRange(min=10, max=600)],

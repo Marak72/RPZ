@@ -620,3 +620,116 @@ def test_empty_page_stops_the_loop():
     result = _run_search(client)
     assert len(calls) == 1
     assert result.events_read == 0
+
+
+# --- пачка доменов одним запросом -----------------------------------------
+
+def test_filter_for_a_batch_joins_conditions_with_or():
+    """Используются только = и or: что они работают, проверено на практике."""
+    result = siem_client._render_filter_many(
+        'datafield1 = "{domain}" or datafield3 = "{domain}"',
+        ["a.ru", "b.ru"],
+    )
+    assert result == (
+        '(datafield1 = "a.ru" or datafield3 = "a.ru")'
+        ' or (datafield1 = "b.ru" or datafield3 = "b.ru")'
+    )
+
+
+def test_events_are_attributed_back_to_their_domains():
+    rows = [
+        {"datafield3": "autodesk.com", "src.ip": "10.0.0.1"},
+        {"datafield3": "evil.ru", "src.ip": "10.0.0.2"},
+    ]
+    out = siem_client._attribute(rows, ["autodesk.com", "evil.ru"],
+                                 siem_client.DOMAIN_FIELDS)
+    assert [r["src.ip"] for r in out["autodesk.com"]] == ["10.0.0.1"]
+    assert [r["src.ip"] for r in out["evil.ru"]] == ["10.0.0.2"]
+
+
+def test_subdomain_event_belongs_to_the_requested_domain():
+    """В datafield6 лежит полное имя, а спрашивали базовое."""
+    rows = [{"datafield6": "update.delivery.autodesk.com", "src.ip": "10.0.0.1"}]
+    out = siem_client._attribute(rows, ["autodesk.com"],
+                                 siem_client.DOMAIN_FIELDS)
+    assert len(out["autodesk.com"]) == 1
+
+
+def test_the_most_specific_requested_domain_wins():
+    """Если спрошены и корень, и поддомен, событие достаётся поддомену."""
+    rows = [{"datafield6": "update.delivery.autodesk.com", "src.ip": "10.0.0.1"}]
+    out = siem_client._attribute(
+        rows, ["autodesk.com", "delivery.autodesk.com"],
+        siem_client.DOMAIN_FIELDS,
+    )
+    assert out["autodesk.com"] == []
+    assert len(out["delivery.autodesk.com"]) == 1
+
+
+def test_similar_name_is_not_attributed():
+    """Совпадение по границе метки: evilautodesk.com — чужой домен."""
+    rows = [{"datafield3": "evilautodesk.com", "src.ip": "10.0.0.1"}]
+    out = siem_client._attribute(rows, ["autodesk.com"],
+                                 siem_client.DOMAIN_FIELDS)
+    assert out["autodesk.com"] == []
+
+
+def test_every_requested_domain_gets_an_entry():
+    """Домен без событий тоже должен получить результат, иначе он не будет
+    отмечен проверенным и попадёт в следующий прогон."""
+    out = siem_client._attribute([], ["a.ru", "b.ru"], siem_client.DOMAIN_FIELDS)
+    assert set(out) == {"a.ru", "b.ru"}
+
+
+def test_filter_fields_are_taken_from_the_template():
+    assert siem_client._filter_fields(
+        'datafield1 = "{domain}" or datafield3 = "{domain}"'
+    ) == ["datafield1", "datafield3"]
+
+
+def test_search_many_splits_results_per_domain(monkeypatch):
+    config = siem_client.SiemConfig(base_url="https://siem.local", limit=5000)
+    client = siem_client.SiemClient(config)
+    sent = []
+
+    def fake_open(request, timeout=None):
+        sent.append(json.loads(request.data.decode()))
+        rows = [
+            {"datafield3": "a.ru", "src.ip": "10.0.0.1"},
+            {"datafield3": "a.ru", "src.ip": "10.0.0.1"},
+            {"datafield3": "b.ru", "src.ip": "10.0.0.2"},
+            {"datafield3": "c.ru", "src.ip": "10.0.0.3"},
+        ]
+        return _FakeResponse(json.dumps({"totalCount": 4, "events": rows}))
+
+    monkeypatch.setattr(client._opener, "open", fake_open)
+    results = client.search_many(
+        ["a.ru", "b.ru"], TIME_FROM, TIME_TO,
+        'datafield1 = "{domain}" or datafield3 = "{domain}"', "src.ip",
+    )
+
+    # Один запрос на оба домена — ради этого всё и затевалось.
+    assert len(sent) == 1
+    assert set(results) == {"a.ru", "b.ru"}
+    assert results["a.ru"].hosts[0].address == "10.0.0.1"
+    assert results["a.ru"].events_read == 2
+    assert results["b.ru"].hosts[0].address == "10.0.0.2"
+    # Чужое событие (c.ru) не приписано никому из запрошенных.
+    assert sum(r.events_read for r in results.values()) == 3
+
+
+def test_search_many_asks_for_the_name_fields():
+    """Без них события нечем разложить обратно по доменам."""
+    body = siem_client._build_group_query(
+        query_filter="x", group_field="src.ip",
+        time_from=TIME_FROM, time_to=TIME_TO,
+        select=siem_client._select_for(["src.ip"]) + list(siem_client.DOMAIN_FIELDS),
+        group_by=[],
+    )
+    for name in ("datafield1", "datafield3", "datafield6", "object.value"):
+        assert name in body["filter"]["select"], name
+
+
+def test_search_many_ignores_empty_input():
+    client = siem_client.SiemClient(siem_client.SiemConfig(base_url="https://s"))
+    assert client.search_many([], TIME_FROM, TIME_TO, "x", "src.ip") == {}

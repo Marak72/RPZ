@@ -44,6 +44,10 @@ KEY_SIEM_WINDOW = "siem_window_hours"            # окно поиска, час
 # «взять только первые 500 событий» — незаметное урезание выборки.
 KEY_SIEM_MAX_EVENTS = "siem_max_events"
 KEY_SIEM_TIMEOUT = "siem_timeout"                # таймаут запроса, секунд
+# Сколько доменов уходит в SIEM одним запросом: условия объединяются через
+# or, события раскладываются по доменам на нашей стороне. Единица возвращает
+# прежнее поведение — отдельный запрос на каждый домен.
+KEY_SIEM_CHUNK = "siem_domains_per_query"
 
 # Фильтр из рабочей практики: домен в SkyDNS-событиях попадает в datafield1
 # (запрошенное имя) либо datafield3 (имя из ответа/CNAME).
@@ -54,6 +58,7 @@ DEFAULT_SIEM_FILTER = 'datafield1 = "{domain}" or datafield3 = "{domain}"'
 DEFAULT_SIEM_GROUP_FIELD = "src.ip"
 DEFAULT_SIEM_TIMEOUT = 120
 DEFAULT_SIEM_MAX_EVENTS = 20000
+DEFAULT_SIEM_CHUNK = 20
 
 DEFAULT_SKYDNS_TZ = "Asia/Yekaterinburg"
 DEFAULT_SKYDNS_LIMIT = 2000
