@@ -891,3 +891,10 @@ tr:hover .copy-btn { opacity: 1; }
    говорить, иначе «найдено 0» выглядит как обычная пустая выборка. */
 .job--has-errors { border-left-color: var(--warning); }
 .job--has-errors .job__bar i { background: var(--warning); }
+
+.job__cancel {
+  background: none; border: 0; cursor: pointer; padding: 0 .25rem;
+  font-size: .6875rem; color: var(--text-muted); text-decoration: underline;
+}
+.job__cancel:hover { color: var(--danger); }
+.job__cancel:disabled { cursor: default; text-decoration: none; }

@@ -927,3 +927,103 @@ def test_settings_page_shows_the_effective_filter(client):
     db.session.commit()
     body = client.get("/skydns/settings").get_data(as_text=True)
     assert "datafield6" in body
+
+
+# --- отказ пачки не должен уносить здоровые домены ------------------------
+
+def test_failed_batch_is_retried_domain_by_domain(client, monkeypatch):
+    """Отказ по пачке ничего не говорит о конкретном домене."""
+    from app.models import BackgroundJob
+
+    original = FakeSiemClient.search_many
+
+    def flaky(self, domains, *args, **kwargs):
+        # Пачкой не отвечаем (как будто фильтр слишком длинный),
+        # поштучно — отвечаем.
+        if len(domains) > 1:
+            raise SiemError("SIEM вернул ошибку 400 на запрос событий.")
+        return original(self, domains, *args, **kwargs)
+
+    monkeypatch.setattr(FakeSiemClient, "search_many", flaky)
+    for i in range(3):
+        _add_threat(f"evil{i}.ru")
+
+    client.post("/skydns/lookup-batch")
+
+    # Все домены проверены, несмотря на отказ пачки.
+    assert ThreatDomain.query.filter(
+        ThreatDomain.siem_checked_at.is_(None)
+    ).count() == 0
+    assert "Проверено доменов: 3" in BackgroundJob.query.one().message
+
+
+def test_single_domain_failure_is_reported_for_that_domain(client, monkeypatch):
+    """Если не отвечает и поштучно — ошибка ложится на свой домен."""
+    def always_fails(self, domains, *args, **kwargs):
+        # Домен ломает и общий запрос, и свой собственный.
+        if "bad.ru" in domains:
+            raise SiemError("SIEM вернул ошибку 500.")
+        return {d: SearchResult(query_filter="x") for d in domains}
+
+    monkeypatch.setattr(FakeSiemClient, "search_many", always_fails)
+    _add_threat("good.ru")
+    _add_threat("bad.ru")
+    client.post("/skydns/lookup-batch")
+
+    logs = {log.domain: log for log in SiemQueryLog.query.all()}
+    assert logs["bad.ru"].status == "failed"
+    assert logs["good.ru"].status == "success"
+    # Здоровый домен отмечен проверенным, сбойный — нет.
+    threats = {t.domain: t for t in ThreatDomain.query.all()}
+    assert threats["good.ru"].siem_checked_at is not None
+    assert threats["bad.ru"].siem_checked_at is None
+
+
+# --- снятие зависшего задания ---------------------------------------------
+
+def test_cancelled_job_frees_the_next_run(client):
+    """После перезапуска службы запись остаётся «выполняется»."""
+    from datetime import datetime
+
+    from app.models import JOB_KIND_SIEM, JOB_RUNNING, BackgroundJob
+
+    stuck = BackgroundJob(
+        kind=JOB_KIND_SIEM, status=JOB_RUNNING, title="осталось от перезапуска",
+        heartbeat_at=datetime.utcnow(), user_id=User.query.one().id,
+    )
+    db.session.add(stuck)
+    db.session.commit()
+
+    # Пока задание висит, новый поиск не запускается.
+    threat_id = _add_threat()
+    client.post(f"/skydns/domains/{threat_id}/lookup")
+    assert BackgroundJob.query.count() == 1
+
+    assert client.post(f"/jobs/{stuck.id}/cancel").get_json()["ok"] is True
+    assert db.session.get(BackgroundJob, stuck.id).status == "failed"
+
+    # А теперь — запускается.
+    client.post(f"/skydns/domains/{threat_id}/lookup")
+    assert BackgroundJob.query.count() == 2
+
+
+def test_worker_stops_when_the_job_is_cancelled(app):
+    """Снятое задание не должно дописывать результаты задним числом."""
+    from app.models import JOB_KIND_SIEM, BackgroundJob
+    from app.services import jobs
+
+    steps = []
+
+    def work(handle):
+        handle.progress(processed=1, detail="первый")
+        steps.append(1)
+        jobs.cancel(db.session.get(BackgroundJob, handle.job_id))
+        handle.progress(processed=2, detail="второй")   # здесь и остановится
+        steps.append(2)
+        return "не должно попасть в итог"
+
+    job = jobs.start(app, kind=JOB_KIND_SIEM, title="Тест", worker=work,
+                     total=2, user_id=User.query.one().id)
+    assert steps == [1]
+    assert job.status == "failed"
+    assert "Снято оператором" in job.message

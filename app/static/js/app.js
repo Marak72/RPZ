@@ -423,6 +423,16 @@
 
       // Закрыть можно только завершённое: спрятать идущую работу — значит
       // потерять её из виду и решить, что ничего не запускалось.
+      // Отменить можно только идущее, скрыть — только завершённое.
+      var cancelBtn = card.querySelector("[data-job-cancel]");
+      cancelBtn.classList.toggle("hidden", !(job.active && job.mine));
+      cancelBtn.addEventListener("click", function () {
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = "Отменяю…";
+        lastSignature = "";
+        post(jobsUrl.replace(/status\.json$/, job.id + "/cancel"));
+      });
+
       var close = card.querySelector("[data-job-close]");
       close.classList.toggle("hidden", job.active);
       close.addEventListener("click", function () {

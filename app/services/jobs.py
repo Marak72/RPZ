@@ -68,6 +68,11 @@ class JobHandle:
         job = self.job
         if job is None:
             raise JobCancelled("Задание удалено.")
+        if not job.is_active:
+            # Оператор снял задание (или его закрыли как зависшее). Работать
+            # дальше незачем: запись уже завершена, и всё, что мы допишем,
+            # только запутает — поэтому исполнитель останавливается здесь.
+            raise JobCancelled("Задание снято.")
         if processed is not None:
             job.processed = processed
         if failed is not None:
@@ -135,6 +140,34 @@ def _run_inline(app) -> bool:
     if value is None:
         return bool(app.config.get("TESTING"))
     return bool(value)
+
+
+def cancel(job: BackgroundJob, reason: str = "Снято оператором.") -> None:
+    """Снять задание.
+
+    Поток остановится сам: он сверяется с состоянием записи на каждом шаге.
+    Ждать его не нужно — запись уже закрыта, и новое задание можно
+    запускать сразу.
+    """
+    job.status = JOB_FAILED
+    job.finished_at = datetime.utcnow()
+    job.heartbeat_at = job.finished_at
+    job.detail = ""
+    job.message = (job.message + " " if job.message else "") + reason
+    db.session.commit()
+
+
+def cancel_all(kind: str = "") -> int:
+    """Снять все незавершённые задания (при необходимости — только вида)."""
+    query = BackgroundJob.query.filter(
+        BackgroundJob.status.in_(JOB_ACTIVE_STATUSES)
+    )
+    if kind:
+        query = query.filter(BackgroundJob.kind == kind)
+    rows = query.all()
+    for job in rows:
+        cancel(job, "Снято при сбросе заданий.")
+    return len(rows)
 
 
 def start(app, *, kind: str, title: str, worker, service_id: str = "",
@@ -208,7 +241,8 @@ def _execute_inline(job_id: int, worker) -> None:
 
 def _finish_ok(handle: JobHandle, summary: str) -> None:
     job = handle.job
-    if job is None:
+    if job is None or not job.is_active:
+        # Задание успели снять — не воскрешаем его задним числом.
         return
     job.status = JOB_SUCCESS
     job.finished_at = datetime.utcnow()
@@ -223,7 +257,7 @@ def _finish_failed(handle: JobHandle, exc: Exception) -> None:
     # результаты хуже, чем честно показанная ошибка.
     db.session.rollback()
     job = handle.job
-    if job is None:
+    if job is None or not job.is_active:
         return
     job.status = JOB_FAILED
     job.finished_at = datetime.utcnow()

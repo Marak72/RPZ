@@ -85,7 +85,9 @@ def _configure_sqlite(app: Flask) -> None:
         finally:
             cursor.close()
 
-        if str(mode).lower() != "wal":
+        # У базы в памяти журнал всегда "memory", и это правильно: там
+        # одно соединение и делить нечего. Предупреждать не о чем.
+        if str(mode).lower() not in ("wal", "memory"):
             # Без WAL любая запись блокирует читателей: портал будет падать
             # с «database is locked» каждый раз, когда идёт фоновая выгрузка.
             # Молчать об этом нельзя — причина неочевидна.
@@ -247,6 +249,19 @@ def _register_cli(app: Flask) -> None:
         user.set_password(password)
         db.session.commit()
         click.echo(f"Пароль пользователя '{username}' обновлён.")
+
+    @app.cli.command("jobs-reset")
+    def jobs_reset() -> None:
+        """Снять зависшие фоновые задания.
+
+        После перезапуска службы поток-исполнитель не выживает, а запись о
+        задании остаётся «выполняется» и блокирует запуск следующего. Эта
+        команда закрывает такие записи сразу, не дожидаясь таймаута.
+        """
+        from .services.jobs import cancel_all
+
+        count = cancel_all()
+        click.echo(f"Снято незавершённых заданий: {count}.")
 
     @app.cli.command("init-db")
     def init_db() -> None:

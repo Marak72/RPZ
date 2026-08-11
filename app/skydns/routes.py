@@ -706,22 +706,20 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
                     db.session.add(log)
                     logs[threat.domain] = log
 
-                try:
-                    results = client.search_many(
-                        [t.domain for t in threats], time_from, time_to,
-                        filter_template, group_field,
-                    )
-                except SiemError as exc:
-                    # Ошибка запроса — это ошибка всей пачки: разделить её
-                    # по доменам нечем, запрос был общий.
-                    for threat in threats:
-                        log = logs[threat.domain]
-                        log.status = JOB_FAILED
-                        log.finished_at = datetime.utcnow()
-                        log.message = str(exc)
-                        failed += 1
-                    first_error = first_error or f"{names}: {exc}"
-                    processed += len(threats)
+                results, errors = _search_chunk(
+                    client, threats, time_from, time_to,
+                    filter_template, group_field,
+                )
+                for domain, message in errors.items():
+                    log = logs[domain]
+                    log.status = JOB_FAILED
+                    log.finished_at = datetime.utcnow()
+                    log.message = message
+                    failed += 1
+                    first_error = first_error or f"{domain}: {message}"
+                threats = [t for t in threats if t.domain not in errors]
+                if not threats:
+                    processed += len(chunk)
                     db.session.commit()
                     handle.progress(processed=processed, failed=failed,
                                     found=found)
@@ -787,6 +785,39 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
         return summary
 
     return work
+
+
+def _search_chunk(client, threats, time_from, time_to, filter_template,
+                  group_field):
+    """Спросить пачку доменов, а при отказе — каждый по отдельности.
+
+    Пачка уходит одним фильтром, поэтому отказ по ней ничего не говорит о
+    конкретном домене: причина может быть и общая (слишком длинный фильтр,
+    SIEM занят), и частная. Разобраться можно единственным способом —
+    переспросить поштучно. Это медленно, но случается только при отказе,
+    и взамен один сбойный домен не уносит с собой девятнадцать здоровых.
+    """
+    names = [t.domain for t in threats]
+    try:
+        return client.search_many(names, time_from, time_to,
+                                  filter_template, group_field), {}
+    except SiemError as exc:
+        if len(names) == 1:
+            return {}, {names[0]: str(exc)}
+        current_app.logger.warning(
+            "Пачка из %s доменов отклонена SIEM (%s) — переспрашиваю "
+            "по одному", len(names), exc,
+        )
+
+    results, errors = {}, {}
+    for domain in names:
+        try:
+            results.update(client.search_many(
+                [domain], time_from, time_to, filter_template, group_field,
+            ))
+        except SiemError as exc:
+            errors[domain] = str(exc)
+    return results, errors
 
 
 def _chunks(items: list, size: int):

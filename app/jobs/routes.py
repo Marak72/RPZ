@@ -13,6 +13,7 @@ from flask_login import current_user, login_required
 from ..extensions import db
 from ..models import JOB_ACTIVE_STATUSES, BackgroundJob
 from ..services.jobs import active_job  # noqa: F401  (переэкспорт для сервисов)
+from ..services.jobs import cancel
 
 jobs_bp = Blueprint("jobs", __name__, url_prefix="/jobs")
 
@@ -54,6 +55,26 @@ def status():
     for item, job in zip(items, running + finished):
         item["mine"] = job.user_id == current_user.id
     return jsonify({"jobs": items})
+
+
+@jobs_bp.route("/<int:job_id>/cancel", methods=["POST"])
+@login_required
+def cancel_job(job_id: int):
+    """Снять идущее задание.
+
+    Нужно, когда задание ушло не туда (не тот фильтр, не тот период) или
+    осталось висеть после перезапуска службы. Без этого единственным
+    способом запустить поиск заново было бы ждать десять минут, пока
+    портал сам признает исполнителя пропавшим.
+    """
+    if not current_user.is_operator:
+        return jsonify({"ok": False, "reason": "forbidden"}), 403
+    job = db.session.get(BackgroundJob, job_id)
+    if job is None:
+        return jsonify({"ok": False}), 404
+    if job.is_active:
+        cancel(job)
+    return jsonify({"ok": True})
 
 
 @jobs_bp.route("/<int:job_id>/dismiss", methods=["POST"])

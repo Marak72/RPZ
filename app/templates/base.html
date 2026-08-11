@@ -113,6 +113,9 @@
     <div class="job__head">
       <span class="job__spinner" data-job-spinner></span>
       <span class="job__title" data-job-title></span>
+      {# Отмена нужна не только для «передумал»: после перезапуска службы
+         запись остаётся «выполняется» и блокирует новый запуск. #}
+      <button class="job__cancel hidden" data-job-cancel>Отменить</button>
       <button class="job__close" data-job-close aria-label="Скрыть">×</button>
     </div>
     <div class="job__detail" data-job-detail></div>
