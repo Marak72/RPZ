@@ -39,11 +39,13 @@ KEY_SIEM_FILTER = "siem_filter_template"         # шаблон фильтра �
 KEY_SIEM_GROUP_FIELD = "siem_group_field"        # поле группировки
 KEY_SIEM_WINDOW = "siem_window_hours"            # окно поиска, часов
 KEY_SIEM_LIMIT = "siem_limit"                    # максимум строк ответа
+KEY_SIEM_TIMEOUT = "siem_timeout"                # таймаут запроса, секунд
 
 # Фильтр из рабочей практики: домен в SkyDNS-событиях попадает в datafield1
 # (запрошенное имя) либо datafield3 (имя из ответа/CNAME).
 DEFAULT_SIEM_FILTER = 'datafield1 = "{domain}" or datafield3 = "{domain}"'
 DEFAULT_SIEM_GROUP_FIELD = "dst.host"
+DEFAULT_SIEM_TIMEOUT = 120
 
 DEFAULT_SKYDNS_TZ = "Asia/Yekaterinburg"
 DEFAULT_SKYDNS_LIMIT = 2000
@@ -128,6 +130,7 @@ def load_siem_config():
         client_secret=get_setting(KEY_SIEM_CLIENT_SECRET),
         verify_ssl=get_bool(KEY_SIEM_VERIFY, False),
         limit=get_int(KEY_SIEM_LIMIT, 500),
+        timeout=get_int(KEY_SIEM_TIMEOUT, DEFAULT_SIEM_TIMEOUT),
     )
 
 

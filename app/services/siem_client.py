@@ -21,6 +21,11 @@ MaxPatrol SIEM:
     OIDC form-post редиректом; авторизация живёт в cookie;
   * ``token``   — OAuth2 password grant на ``/connect/token`` порта Core;
     авторизация передаётся заголовком ``Authorization: Bearer``.
+
+Порядок вызовов и формат тела запроса повторяют официальную обёртку
+``mpsiem_api`` (она построена на ``requests``, поэтому редиректы там идут
+автоматически — здесь используется штатный обработчик редиректов urllib
+с общей банкой cookie, что даёт то же поведение).
 """
 from __future__ import annotations
 
@@ -41,7 +46,8 @@ CORE_PORT = 3334
 
 # Пути API MaxPatrol SIEM.
 PATH_UI_LOGIN = "/ui/login"
-PATH_LOGIN_FORM = "/account/login?returnUrl=/"
+PATH_LOGIN_FORM = "/account/login"
+LOGIN_FORM_QUERY = "returnUrl=/"
 PATH_TOKEN = "/connect/token"
 PATH_SYSTEM_INFO = "/api/deployment_configuration/v1/system_info"
 PATH_EVENTS = "/api/events/v2/events"
@@ -77,7 +83,9 @@ class SiemConfig:
     client_id: str = DEFAULT_CLIENT_ID
     client_secret: str = ""
     verify_ssl: bool = False
-    timeout: int = 30
+    # Сгруппированный запрос за несколько суток SIEM считает не мгновенно,
+    # поэтому 30 секунд по умолчанию было мало: обрывалось на полпути.
+    timeout: int = 120
     limit: int = 500
 
     @property
@@ -101,6 +109,8 @@ class SearchResult:
     hosts: list[HostHit] = field(default_factory=list)
     total_count: int = 0
     query_filter: str = ""
+    #: Ответ упёрся в limit — значит, часть хостов осталась за кадром.
+    truncated: bool = False
 
 
 def _normalize_base(base_url: str) -> str:
@@ -113,14 +123,24 @@ def _normalize_base(base_url: str) -> str:
     return base
 
 
+#: Порты, которые в адресе ничего не значат: это порт по умолчанию для схемы.
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
 def _core_url(base_url: str, path: str) -> str:
     """URL компонента Core: тот же хост, но порт 3334.
 
     Если в настройках порт указали явно, он считается осознанным выбором
-    и не подменяется.
+    и не подменяется. Исключение — 443 и 80: их браузер показывает в адресной
+    строке сам, и скопированный оттуда адрес не означает, что вход в Core
+    надо искать там же.
     """
     parts = urllib.parse.urlsplit(_normalize_base(base_url))
-    netloc = parts.netloc if parts.port else f"{parts.netloc}:{CORE_PORT}"
+    port = parts.port
+    if port and port != DEFAULT_PORTS.get(parts.scheme):
+        netloc = parts.netloc
+    else:
+        netloc = f"{parts.hostname}:{CORE_PORT}"
     return urllib.parse.urlunsplit((parts.scheme, netloc, path, "", ""))
 
 
@@ -138,7 +158,8 @@ def _ssl_context(verify: bool) -> ssl.SSLContext:
     return context
 
 
-def _to_unix_ms(moment: datetime) -> int:
+def _to_unix_seconds(moment: datetime) -> int:
+    """SIEM ждёт границы периода в секундах Unix, а не в миллисекундах."""
     return int(moment.timestamp())
 
 
@@ -149,10 +170,12 @@ class SiemClient:
         self.config = config
         self._cookies = CookieJar()
         self._token = ""
+        # Редиректы идут своим чередом: вход в SIEM — это цепочка OIDC
+        # (/account/login → /connect/authorize на Core → возврат обратно),
+        # и пройти её надо целиком, попутно собирая cookie.
         self._opener = urllib.request.build_opener(
             urllib.request.HTTPSHandler(context=_ssl_context(config.verify_ssl)),
             urllib.request.HTTPCookieProcessor(self._cookies),
-            _NoRedirect(),
         )
 
     # --- низкий уровень ---------------------------------------------------
@@ -163,9 +186,9 @@ class SiemClient:
         data: bytes | None = None,
         headers: dict | None = None,
         method: str | None = None,
-        allow_redirect: bool = True,
+        accept: str = "application/json",
     ):
-        base_headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+        base_headers = {"User-Agent": USER_AGENT, "Accept": accept}
         if self._token:
             base_headers["Authorization"] = f"Bearer {self._token}"
         base_headers.update(headers or {})
@@ -175,16 +198,7 @@ class SiemClient:
         )
         try:
             return self._opener.open(request, timeout=self.config.timeout)
-        except urllib.error.HTTPError as exc:
-            # Редиректы OIDC приходят как HTTPError из-за _NoRedirect.
-            if allow_redirect and exc.code in (301, 302, 303, 307, 308):
-                location = exc.headers.get("Location", "")
-                if location:
-                    return self._request(
-                        urllib.parse.urljoin(url, location),
-                        headers=headers,
-                        allow_redirect=False,
-                    )
+        except urllib.error.HTTPError:
             raise
         except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
             raise SiemError(f"Не удалось связаться с SIEM ({url}): {exc}") from exc
@@ -274,16 +288,31 @@ class SiemClient:
             raise SiemAuthError(f"SIEM отклонил вход: {payload['message']}")
 
         # Забираем HTML-форму авторизации и отправляем её — так веб-интерфейс
-        # обменивает сессию Core на cookie основного портала SIEM.
-        form_url = _api_url(self.config.base_url, "/account/login", "returnUrl=/")
-        form_html = self._request(form_url).read().decode("utf-8", errors="replace")
+        # обменивает сессию Core на cookie основного портала SIEM. Страница
+        # отдаётся в HTML, поэтому Accept: application/json тут неуместен.
+        form_url = _api_url(self.config.base_url, PATH_LOGIN_FORM, LOGIN_FORM_QUERY)
+        try:
+            form_html = self._request(
+                form_url, accept="text/html,application/xhtml+xml,*/*"
+            ).read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            raise SiemAuthError(
+                f"Форма авторизации SIEM недоступна ({exc.code})."
+            ) from exc
+
         action, fields = self._parse_login_form(form_html)
         if action:
-            self._request(
-                urllib.parse.urljoin(form_url, action),
-                data=urllib.parse.urlencode(fields).encode(),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
+            try:
+                self._request(
+                    urllib.parse.urljoin(form_url, action),
+                    data=urllib.parse.urlencode(fields).encode(),
+                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    accept="text/html,application/xhtml+xml,*/*",
+                )
+            except urllib.error.HTTPError as exc:
+                raise SiemAuthError(
+                    f"SIEM отклонил обмен сессии ({exc.code})."
+                ) from exc
 
         # Контрольный запрос: если сессия не поднялась, дальше нет смысла.
         try:
@@ -366,6 +395,9 @@ class SiemClient:
             hosts=hosts,
             total_count=int(payload.get("totalCount") or 0),
             query_filter=query_filter,
+            # Постраничного дочитывания нет: если строк ровно limit, значит
+            # SIEM отдал не всё, и оператор должен об этом узнать.
+            truncated=len(_response_rows(payload)) >= limit,
         )
 
     def close(self) -> None:
@@ -377,13 +409,6 @@ class SiemClient:
 
     def __exit__(self, *_exc) -> None:
         self.close()
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Отключает автоматические редиректы: OIDC-цепочку ведём вручную."""
-
-    def redirect_request(self, *_args, **_kwargs):
-        return None
 
 
 def _render_filter(template: str, domain: str) -> str:
@@ -420,8 +445,8 @@ def _build_group_query(
             "aliases": {},
         },
         "groupValues": [],
-        "timeFrom": _to_unix_ms(time_from),
-        "timeTo": _to_unix_ms(time_to),
+        "timeFrom": _to_unix_seconds(time_from),
+        "timeTo": _to_unix_seconds(time_to),
     }
 
 
@@ -441,6 +466,14 @@ def _extract_error(raw: str) -> str:
     return str(payload.get("message") or raw[:300])
 
 
+def _response_rows(payload: dict) -> list:
+    """Строки ответа SIEM: в разных версиях это ``events`` либо ``rows``."""
+    rows = payload.get("events")
+    if not isinstance(rows, list):
+        rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    return rows
+
+
 def _parse_group_rows(payload: dict, group_field: str) -> list[HostHit]:
     """Разобрать сгруппированный ответ SIEM в список хостов.
 
@@ -448,9 +481,7 @@ def _parse_group_rows(payload: dict, group_field: str) -> list[HostHit]:
     разбор намеренно терпимый: ищем значение поля группировки и счётчик в
     нескольких возможных местах строки ответа.
     """
-    rows = payload.get("events")
-    if not isinstance(rows, list):
-        rows = payload.get("rows") if isinstance(payload.get("rows"), list) else []
+    rows = _response_rows(payload)
 
     hits: dict[str, HostHit] = {}
     for row in rows:

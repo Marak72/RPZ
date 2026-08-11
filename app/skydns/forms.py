@@ -87,6 +87,10 @@ class SiemSettingsForm(FlaskForm):
         "Максимум строк в ответе",
         validators=[Optional(), NumberRange(min=10, max=10000)],
     )
+    timeout = IntegerField(
+        "Таймаут запроса, секунд",
+        validators=[Optional(), NumberRange(min=10, max=600)],
+    )
     submit_siem = SubmitField("Сохранить")
     test_siem = SubmitField("Проверить подключение")
 

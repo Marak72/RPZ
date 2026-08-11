@@ -205,6 +205,14 @@
         <div class="field">
           {{ siem_form.limit.label(class="label") }}
           {{ siem_form.limit() }}
+          <div class="help">Больше строк SIEM за один ответ не отдаст. Если предел
+            достигнут, портал скажет об этом в журнале запросов.</div>
+        </div>
+        <div class="field">
+          {{ siem_form.timeout.label(class="label") }}
+          {{ siem_form.timeout() }}
+          <div class="help">Сгруппированный запрос за большое окно SIEM считает
+            небыстро. По умолчанию 120 с.</div>
         </div>
       </div>
       <div class="check">

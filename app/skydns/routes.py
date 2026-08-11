@@ -53,6 +53,7 @@ from ..services.skydns_client import SkydnsClient, SkydnsError
 from ..settings_store import (
     DEFAULT_SIEM_FILTER,
     DEFAULT_SIEM_GROUP_FIELD,
+    DEFAULT_SIEM_TIMEOUT,
     DEFAULT_SKYDNS_LIMIT,
     DEFAULT_SKYDNS_TZ,
     KEY_SIEM_AUTH_MODE,
@@ -63,6 +64,7 @@ from ..settings_store import (
     KEY_SIEM_GROUP_FIELD,
     KEY_SIEM_LIMIT,
     KEY_SIEM_PASSWORD,
+    KEY_SIEM_TIMEOUT,
     KEY_SIEM_URL,
     KEY_SIEM_USERNAME,
     KEY_SIEM_VERIFY,
@@ -404,11 +406,12 @@ def _apply_hits(threat: ThreatDomain, hits) -> int:
     return len(existing)
 
 
-def _lookup(threats: list[ThreatDomain]) -> tuple[int, int, list[str]]:
+def _lookup(threats: list[ThreatDomain]) -> tuple[int, int, list[str], list[str]]:
     """Найти в SIEM конечные хосты для списка доменов.
 
     Вход в SIEM выполняется один раз на всю пачку. Возвращает количество
-    успешно обработанных доменов, количество ошибок и список сообщений.
+    успешно обработанных доменов, количество ошибок, список сообщений об
+    ошибках и список предупреждений (запрос прошёл, но результат неполный).
     """
     config = load_siem_config()
     filter_template = get_siem_filter_template()
@@ -417,6 +420,7 @@ def _lookup(threats: list[ThreatDomain]) -> tuple[int, int, list[str]]:
 
     done = failed = 0
     messages: list[str] = []
+    warnings: list[str] = []
 
     client = SiemClient(config)
     try:
@@ -431,7 +435,7 @@ def _lookup(threats: list[ThreatDomain]) -> tuple[int, int, list[str]]:
                 user_id=current_user.id,
             ))
         db.session.commit()
-        return 0, len(threats), [str(exc)]
+        return 0, len(threats), [str(exc)], []
 
     try:
         for threat in threats:
@@ -470,24 +474,36 @@ def _lookup(threats: list[ThreatDomain]) -> tuple[int, int, list[str]]:
                 f"Найдено хостов: {len(result.hosts)}; "
                 f"событий: {result.total_count}."
             )
+            if result.truncated:
+                # Постранично ответ не дочитывается, поэтому молчать об этом
+                # нельзя: часть хостов могла не попасть в выборку.
+                log.message += (
+                    f" Ответ упёрся в предел {config.limit} строк — "
+                    "часть хостов могла не войти; сузьте окно поиска "
+                    "или увеличьте предел в настройках."
+                )
+                warnings.append(f"{threat.domain}: ответ SIEM усечён "
+                                f"по пределу {config.limit} строк.")
             done += 1
     finally:
         client.close()
         db.session.commit()
 
-    return done, failed, messages
+    return done, failed, messages, warnings
 
 
 @skydns_bp.route("/domains/<int:threat_id>/lookup", methods=["POST"])
 @operator_required
 def threat_lookup(threat_id: int):
     threat = db.get_or_404(ThreatDomain, threat_id)
-    done, failed, messages = _lookup([threat])
+    done, failed, messages, warnings = _lookup([threat])
     if done:
         flash(
             f"SIEM: найдено хостов — {threat.siem_hosts_count}.",
             "success" if threat.siem_hosts_count else "info",
         )
+    if warnings:
+        flash("\n".join(warnings), "warning")
     if failed:
         flash("\n".join(messages) or "Запрос в SIEM не удался.", "danger")
     return redirect(url_for("skydns.threat_view", threat_id=threat.id))
@@ -521,9 +537,11 @@ def lookup_batch():
             "info",
         )
 
-    done, failed, messages = _lookup(threats)
+    done, failed, messages, warnings = _lookup(threats)
     if done:
         flash(f"Проверено доменов: {done}.", "success")
+    if warnings:
+        flash("\n".join(warnings[:5]), "warning")
     if failed:
         preview = "\n".join(messages[:5])
         flash(f"Не удалось проверить доменов: {failed}.\n{preview}", "danger")
@@ -1044,6 +1062,7 @@ def _siem_form() -> SiemSettingsForm:
         group_field=get_setting(KEY_SIEM_GROUP_FIELD, DEFAULT_SIEM_GROUP_FIELD),
         window_hours=get_int(KEY_SIEM_WINDOW, DEFAULT_WINDOW_HOURS),
         limit=get_int(KEY_SIEM_LIMIT, 500),
+        timeout=get_int(KEY_SIEM_TIMEOUT, DEFAULT_SIEM_TIMEOUT),
     )
 
 
@@ -1120,6 +1139,8 @@ def _save_siem(form) -> None:
         set_setting(KEY_SIEM_WINDOW, str(form.window_hours.data))
     if form.limit.data:
         set_setting(KEY_SIEM_LIMIT, str(form.limit.data))
+    if form.timeout.data:
+        set_setting(KEY_SIEM_TIMEOUT, str(form.timeout.data))
     # Секреты перезаписываются, только если их ввели заново.
     if form.password.data:
         set_setting(KEY_SIEM_PASSWORD, form.password.data, is_secret=True)
