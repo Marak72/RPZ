@@ -125,7 +125,6 @@ def group_by_domain(entries: list[ParsedEntry]) -> list[dict]:
     """Свернуть base+wildcard одного домена в одну строку для отображения."""
     grouped: dict[str, dict] = {}
     for e in entries:
-        key = (e.domain, e.record_type, e.target)
         row = grouped.get(e.domain)
         if row is None:
             row = {

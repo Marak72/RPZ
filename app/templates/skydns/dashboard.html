@@ -126,12 +126,14 @@
       <table class="table">
         <thead>
           <tr>
-            <th>Категория</th><th class="num">Запросов</th>
-            <th class="num">Доля</th><th class="num">Доменов</th>
+            <th>Категория</th>
+            <th class="num">Запросов</th>
+            <th class="num">Доменов</th>
           </tr>
         </thead>
         <tbody>
           {% for cat in danger_cats %}
+          {% set share = (cat.requests * 100 / danger_total) if danger_total else 0 %}
           <tr>
             <td>
               <a href="{{ url_for('skydns.domains', category=cat.id) }}">
@@ -139,14 +141,15 @@
               {% if not cat.is_tracked %}
               <span class="badge badge--neutral">не отслеживается</span>
               {% endif %}
-            </td>
-            <td class="num">{{ '{:,}'.format(cat.requests).replace(',', ' ') }}</td>
-            <td class="num">
-              {% set share = (cat.requests * 100 / danger_total) if danger_total else 0 %}
-              <div class="share">
-                <span class="share__value">{{ '%.1f'|format(share) }}%</span>
+              {# Доля отдельным столбцом не помещалась в узкую карточку —
+                 показываем её полоской под названием категории. #}
+              <div class="share" title="Доля в объёме вредоносных запросов">
                 <span class="share__bar"><i style="width: {{ share }}%"></i></span>
+                <span class="share__value">{{ '%.1f'|format(share) }}%</span>
               </div>
+            </td>
+            <td class="num nowrap">
+              {{ '{:,}'.format(cat.requests).replace(',', ' ') if cat.requests else '—' }}
             </td>
             <td class="num">
               {% if cat.domains_count %}

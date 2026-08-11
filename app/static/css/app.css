@@ -307,7 +307,7 @@ a.user-chip:hover { background: var(--surface-3); text-decoration: none; }
 }
 .card__title { font-size: .9375rem; font-weight: 600; }
 .card__body { padding: 1.125rem; }
-.card__body--flush { padding: 0; }
+.card__body--flush { padding: 0; overflow-x: auto; }
 .card__footer {
   padding: .75rem 1.125rem; border-top: 1px solid var(--border);
   background: var(--surface-2);
@@ -787,11 +787,14 @@ tr:hover .copy-btn { opacity: 1; }
 }
 .queue__list { display: grid; gap: .5rem; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
 
-/* Доля категории в объёме запросов. */
-.share { display: flex; align-items: center; gap: .5rem; justify-content: flex-end; }
-.share__value { font-variant-numeric: tabular-nums; min-width: 3.25rem; text-align: right; }
+/* Доля категории в объёме запросов: полоска под названием. */
+.share { display: flex; align-items: center; gap: .5rem; margin-top: .25rem; }
+.share__value {
+  font-size: .6875rem; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; flex: none;
+}
 .share__bar {
-  display: block; width: 70px; height: 6px; flex: none;
+  display: block; flex: 1; min-width: 40px; height: 5px;
   background: var(--surface-3); border-radius: 999px; overflow: hidden;
 }
 .share__bar i { display: block; height: 100%; background: var(--danger); }
