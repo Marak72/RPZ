@@ -341,4 +341,111 @@
 
   /* Первичный подсчёт выделения */
   updateSelectionCount("[data-select-scope]");
+
+  /* --- Плашка фоновых заданий ------------------------------------------
+     Поиск хостов в SIEM идёт минутами. Раньше страница просто висела на
+     кнопке; теперь работа уходит в фон, а здесь показывается её ход.
+     Опрос лёгкий (короткий JSON) и разрежается, как только активных
+     заданий не остаётся, — постоянной нагрузки на сервер не создаёт. */
+  var tray = document.querySelector("[data-jobs-tray]");
+  var jobsUrl = meta("jobs-url");
+
+  if (tray && jobsUrl) {
+    var ACTIVE_INTERVAL = 2000;   // пока работа идёт — следим часто
+    var IDLE_INTERVAL = 30000;    // иначе просто проверяем, не начал ли кто
+    var timer = null;
+    var lastSignature = "";
+
+    var pollJobs = function (delay) {
+      clearTimeout(timer);
+      timer = setTimeout(fetchJobs, delay);
+    };
+
+    var fetchJobs = function () {
+      fetch(jobsUrl, { headers: { Accept: "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : { jobs: [] }; })
+        .then(function (data) {
+          var jobs = data.jobs || [];
+          render(jobs);
+          var busy = jobs.some(function (j) { return j.active; });
+          pollJobs(busy ? ACTIVE_INTERVAL : IDLE_INTERVAL);
+        })
+        .catch(function () {
+          // Сеть моргнула — не шумим, просто попробуем позже.
+          pollJobs(IDLE_INTERVAL);
+        });
+    };
+
+    var render = function (jobs) {
+      // Перерисовываем, только когда что-то изменилось: иначе плашка
+      // мигала бы каждые две секунды.
+      var signature = jobs.map(function (j) {
+        return [j.id, j.status, j.processed, j.found, j.detail].join(":");
+      }).join("|");
+      if (signature === lastSignature) return;
+      lastSignature = signature;
+
+      tray.textContent = "";
+      jobs.forEach(function (job) { tray.appendChild(buildCard(job)); });
+    };
+
+    var buildCard = function (job) {
+      var tpl = document.getElementById("jobCardTemplate");
+      var card = tpl.content.firstElementChild.cloneNode(true);
+      card.classList.add("job--" + job.status);
+
+      card.querySelector("[data-job-title]").textContent = job.title;
+      card.querySelector("[data-job-spinner]").classList.toggle(
+        "hidden", !job.active
+      );
+
+      var detail = card.querySelector("[data-job-detail]");
+      detail.textContent = job.active
+        ? (job.detail || "Запускается…")
+        : job.message;
+
+      var bar = card.querySelector("[data-job-bar]");
+      bar.style.width = (job.active ? job.percent : 100) + "%";
+
+      var counter = card.querySelector("[data-job-counter]");
+      if (job.active) {
+        counter.textContent = job.total
+          ? job.processed + " из " + job.total + " · найдено " + job.found
+          : "выполняется";
+      } else {
+        counter.textContent = job.status_title;
+      }
+
+      // Закрыть можно только завершённое: спрятать идущую работу — значит
+      // потерять её из виду и решить, что ничего не запускалось.
+      var close = card.querySelector("[data-job-close]");
+      close.classList.toggle("hidden", job.active);
+      close.addEventListener("click", function () {
+        card.remove();
+        lastSignature = "";
+        post(jobsUrl.replace(/status\.json$/, job.id + "/dismiss"));
+      });
+
+      var link = card.querySelector("[data-job-link]");
+      if (!job.active && job.url) {
+        link.href = job.url;
+        link.classList.remove("hidden");
+      }
+      return card;
+    };
+
+    var post = function (url) {
+      fetch(url, {
+        method: "POST",
+        headers: { "X-CSRFToken": meta("csrf-token") },
+      }).catch(function () { /* плашку уже убрали, ответ не важен */ });
+    };
+
+    fetchJobs();
+  }
+
+  function meta(name) {
+    var el = document.querySelector('meta[name="' + name + '"]');
+    return el ? el.getAttribute("content") : "";
+  }
 })();

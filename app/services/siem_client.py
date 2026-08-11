@@ -7,7 +7,7 @@
 руками в интерфейсе SIEM:
 
     фильтр:       datafield1 = "<домен>" or datafield3 = "<домен>"
-    группировка:  dst.host
+    группировка:  src.ip
 
 и возвращает значения группировки (обычно IP-адреса) со счётчиком событий.
 
@@ -340,33 +340,8 @@ class SiemClient:
 
     # --- поиск ------------------------------------------------------------
 
-    def search_hosts(
-        self,
-        domain: str,
-        time_from: datetime,
-        time_to: datetime,
-        filter_template: str,
-        group_field: str,
-        limit: int | None = None,
-    ) -> SearchResult:
-        """Найти конечные хосты, обращавшиеся к домену.
-
-        Повторяет ручной запрос оператора: фильтр по домену + группировка по
-        полю ``group_field`` (по умолчанию ``dst.host``).
-        """
-        domain = (domain or "").strip().lower()
-        if not domain:
-            raise SiemError("Пустой домен для поиска в SIEM.")
-
-        query_filter = _render_filter(filter_template, domain)
-        limit = limit or self.config.limit
-        body = _build_group_query(
-            query_filter=query_filter,
-            group_field=group_field,
-            time_from=time_from,
-            time_to=time_to,
-        )
-
+    def _events(self, body: dict, limit: int) -> dict:
+        """Отправить сгруппированный запрос и вернуть разобранный ответ."""
         url = _api_url(
             self.config.base_url,
             PATH_EVENTS,
@@ -389,8 +364,41 @@ class SiemClient:
                 f"SIEM вернул ошибку {exc.code} на запрос событий. {detail}"
             ) from exc
 
-        payload = self._read_json(response)
-        hosts = _parse_group_rows(payload, group_field)
+        return self._read_json(response)
+
+    def search_hosts(
+        self,
+        domain: str,
+        time_from: datetime,
+        time_to: datetime,
+        filter_template: str,
+        group_field: str,
+        limit: int | None = None,
+    ) -> SearchResult:
+        """Найти конечные хосты, обращавшиеся к домену.
+
+        Повторяет ручной запрос оператора: фильтр по домену + группировка по
+        полю ``group_field`` (по умолчанию ``src.ip``). В настройке можно
+        перечислить несколько полей через запятую — см. :func:`_group_fields`.
+        """
+        domain = (domain or "").strip().lower()
+        if not domain:
+            raise SiemError("Пустой домен для поиска в SIEM.")
+
+        fields = _group_fields(group_field)
+        query_filter = _render_filter(filter_template, domain)
+        limit = limit or self.config.limit
+        payload = self._events(
+            _build_group_query(
+                query_filter=query_filter,
+                group_field=fields,
+                time_from=time_from,
+                time_to=time_to,
+            ),
+            limit,
+        )
+
+        hosts = _parse_group_rows(payload, fields)
         return SearchResult(
             hosts=hosts,
             total_count=int(payload.get("totalCount") or 0),
@@ -399,6 +407,47 @@ class SiemClient:
             # SIEM отдал не всё, и оператор должен об этом узнать.
             truncated=len(_response_rows(payload)) >= limit,
         )
+
+    def probe(
+        self,
+        domain: str,
+        time_from: datetime,
+        time_to: datetime,
+        filter_template: str,
+        group_field: str,
+        limit: int = 20,
+    ) -> dict:
+        """Диагностика: что мы отправили и что SIEM ответил дословно.
+
+        Когда поиск возвращает ноль хостов, вопрос всегда один: событий не
+        нашлось вовсе или они пришли, но значение группировки лежит не там,
+        где мы его ищем. По журналу этого не видно, поэтому показываем сырой
+        запрос и сырой ответ — по ним настройка правится за один заход.
+        """
+        fields = _group_fields(group_field)
+        query_filter = _render_filter(filter_template, (domain or "").strip().lower())
+        body = _build_group_query(
+            query_filter=query_filter, group_field=fields,
+            time_from=time_from, time_to=time_to,
+        )
+        payload = self._events(body, limit)
+        rows = _response_rows(payload)
+        return {
+            "request": body,
+            "filter": query_filter,
+            "group_fields": fields,
+            "total_count": payload.get("totalCount"),
+            "rows_returned": len(rows),
+            # Ключи первой строки — по ним сразу видно, как SIEM назвал
+            # поле группировки и счётчик в этой инсталляции.
+            "row_keys": sorted(rows[0].keys()) if rows and isinstance(rows[0], dict)
+                        else [],
+            "rows": rows[:5],
+            "parsed": [
+                {"address": h.address, "events": h.events_count}
+                for h in _parse_group_rows(payload, fields)
+            ][:20],
+        }
 
     def close(self) -> None:
         self._opener.close()
@@ -424,21 +473,38 @@ def _render_filter(template: str, domain: str) -> str:
     return template.replace("{domain}", safe)
 
 
+def _group_fields(group_field) -> list[str]:
+    """Разобрать настройку поля группировки в список полей.
+
+    Конечный хост в разных источниках событий лежит в разных полях: где-то
+    это ``src.ip``, где-то ``src.host``, а в событиях прокси — ``dst.host``.
+    Поэтому в настройке разрешено перечислить несколько через запятую:
+    группируем по всем, а адресом считаем первое непустое значение.
+    """
+    if isinstance(group_field, (list, tuple)):
+        raw = list(group_field)
+    else:
+        raw = str(group_field or "").replace(";", ",").split(",")
+    fields = [item.strip() for item in raw if item and item.strip()]
+    return fields or ["src.ip"]
+
+
 def _build_group_query(
     query_filter: str,
-    group_field: str,
+    group_field,
     time_from: datetime,
     time_to: datetime,
 ) -> dict:
     """Тело запроса ``/api/events/v2/events`` с группировкой и подсчётом."""
+    fields = _group_fields(group_field)
     return {
         "filter": {
-            "select": [group_field, "time"],
+            "select": fields + ["time"],
             "where": query_filter,
             "orderBy": [{"field": "time", "sortOrder": "descending"}],
-            "groupBy": [group_field],
+            "groupBy": fields,
             "aggregateBy": [
-                {"function": "COUNT", "field": group_field, "unique": False}
+                {"function": "COUNT", "field": fields[0], "unique": False}
             ],
             "distributeBy": [],
             "top": None,
@@ -474,20 +540,21 @@ def _response_rows(payload: dict) -> list:
     return rows
 
 
-def _parse_group_rows(payload: dict, group_field: str) -> list[HostHit]:
+def _parse_group_rows(payload: dict, group_field) -> list[HostHit]:
     """Разобрать сгруппированный ответ SIEM в список хостов.
 
     Формат сгруппированного ответа отличается между версиями SIEM, поэтому
     разбор намеренно терпимый: ищем значение поля группировки и счётчик в
     нескольких возможных местах строки ответа.
     """
+    fields = _group_fields(group_field)
     rows = _response_rows(payload)
 
     hits: dict[str, HostHit] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
-        address = _row_value(row, group_field)
+        address = _row_value(row, fields)
         if not address:
             continue
         count = _row_count(row)
@@ -500,23 +567,34 @@ def _parse_group_rows(payload: dict, group_field: str) -> list[HostHit]:
     return sorted(hits.values(), key=lambda h: (-h.events_count, h.address))
 
 
-def _row_value(row: dict, group_field: str) -> str:
-    """Значение поля группировки в строке ответа."""
+def _row_value(row: dict, fields: list[str]) -> str:
+    """Значение поля группировки в строке ответа.
+
+    Полей может быть несколько: берём первое, у которого есть значение —
+    события одного и того же обращения приезжают из разных источников, и
+    адрес конечного хоста заполнен не везде одинаково.
+    """
     # 1. Поле лежит прямо в строке (обычный случай).
-    value = row.get(group_field)
-    if value:
-        return str(value).strip()
+    for name in fields:
+        value = row.get(name)
+        if value not in (None, "", "null"):
+            return str(value).strip()
 
     # 2. Строка обёрнута: {"fields": {...}} либо {"event": {...}}.
     for key in ("fields", "event", "values"):
         nested = row.get(key)
-        if isinstance(nested, dict) and nested.get(group_field):
-            return str(nested[group_field]).strip()
+        if not isinstance(nested, dict):
+            continue
+        for name in fields:
+            if nested.get(name) not in (None, "", "null"):
+                return str(nested[name]).strip()
 
     # 3. Групповой ответ: {"groupValues": ["10.0.0.5"]} или {"key": ...}.
     group_values = row.get("groupValues")
-    if isinstance(group_values, list) and group_values:
-        return str(group_values[0]).strip()
+    if isinstance(group_values, list):
+        for value in group_values:
+            if value not in (None, "", "null"):
+                return str(value).strip()
     for key in ("groupValue", "key", "value"):
         if row.get(key):
             return str(row[key]).strip()
@@ -525,7 +603,7 @@ def _row_value(row: dict, group_field: str) -> str:
 
 def _row_count(row: dict) -> int:
     """Счётчик событий в строке сгруппированного ответа."""
-    for key in ("count", "COUNT", "eventsCount", "aggregateValue", "aggregate"):
+    for key in _count_keys(row):
         value = row.get(key)
         if isinstance(value, (int, float)):
             return int(value)
@@ -540,3 +618,18 @@ def _row_count(row: dict) -> int:
                     if isinstance(first.get(sub), (int, float)):
                         return int(first[sub])
     return 1
+
+
+def _count_keys(row: dict) -> list[str]:
+    """Где в строке может лежать счётчик агрегата.
+
+    Кроме привычных имён, SIEM называет колонку агрегата по самой функции —
+    ``COUNT(src.ip)``. Такое имя заранее не угадать, поэтому ищем его прямо
+    среди ключей строки.
+    """
+    known = ["count", "COUNT", "eventsCount", "aggregateValue", "aggregate"]
+    generated = [
+        key for key in row
+        if isinstance(key, str) and key.upper().startswith("COUNT(")
+    ]
+    return generated + known

@@ -195,8 +195,11 @@
       <div class="row">
         <div class="field">
           {{ siem_form.group_field.label(class="label") }}
-          {{ siem_form.group_field(placeholder="dst.host") }}
-          <div class="help">Значения этого поля и есть искомые конечные хосты.</div>
+          {{ siem_form.group_field(placeholder="src.ip") }}
+          <div class="help">Значения этого поля и есть искомые конечные хосты.
+            Можно перечислить несколько через запятую (например
+            <code>src.ip, src.host</code>) — адрес возьмётся из первого
+            заполненного.</div>
         </div>
         <div class="field">
           {{ siem_form.window_hours.label(class="label") }}
@@ -232,4 +235,22 @@
     </div>
   </div>
 </form>
+
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('search') }}<span class="card__title">Диагностика запроса в SIEM</span>
+  </div>
+  <div class="card__body">
+    <p class="text-sm muted">
+      Если поиск возвращает ноль хостов, здесь видно почему: событий не нашлось
+      вовсе или они пришли, но адрес лежит не в том поле, по которому мы
+      группируем. Показывается сырой ответ SIEM по одному домену.
+    </p>
+    <form method="post" action="{{ url_for('skydns.siem_probe') }}" class="inline">
+      {{ siem_probe_form.hidden_tag() }}
+      {{ siem_probe_form.domain(class="input--auto", placeholder="obltub.ru") }}
+      {{ siem_probe_form.submit_probe(class="btn") }}
+    </form>
+  </div>
+</div>
 {% endblock %}

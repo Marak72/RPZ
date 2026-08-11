@@ -32,6 +32,7 @@ from ..models import (
     HOST_SOURCE_SIEM,
     HOST_SOURCE_SKYDNS,
     JOB_FAILED,
+    JOB_KIND_SIEM,
     JOB_SUCCESS,
     STATUS_NEW,
     THREAT_BLOCKED,
@@ -48,6 +49,7 @@ from ..models import (
     ThreatHost,
 )
 from ..services import skydns_client
+from ..services.jobs import JobError, active_job, start
 from ..services.siem_client import SiemClient, SiemError
 from ..services.skydns_client import SkydnsClient, SkydnsError
 from ..settings_store import (
@@ -99,6 +101,7 @@ from ..web_utils import (
 from .forms import (
     ImportForm,
     ManualThreatForm,
+    SiemProbeForm,
     SiemSettingsForm,
     SkydnsSettingsForm,
     SyncForm,
@@ -112,9 +115,11 @@ skydns_bp.before_request(service_guard("skydns"))
 PER_PAGE = 100
 DEFAULT_WINDOW_HOURS = 24 * 7
 DEFAULT_SYNC_DAYS = 1
-# Сколько доменов разрешаем обработать за один пакетный запрос в SIEM:
-# каждый домен — отдельный запрос, длинная пачка упрётся в таймаут веб-сервера.
-BATCH_LIMIT = 25
+# Сколько доменов разрешаем обработать за один пакетный поиск в SIEM.
+# Раньше предел был 25: поиск шёл прямо в обработчике запроса и длинная пачка
+# упиралась в таймаут веб-сервера. Теперь работа идёт в фоне, и ограничение
+# нужно только чтобы одно задание не растянулось на полдня.
+BATCH_LIMIT = 200
 # Сколько строк детализации забираем за одну выгрузку: из них строится
 # соответствие «домен → устройство».
 DEFAULT_DETAIL_LIMIT = 5000
@@ -406,107 +411,164 @@ def _apply_hits(threat: ThreatDomain, hits) -> int:
     return len(existing)
 
 
-def _lookup(threats: list[ThreatDomain]) -> tuple[int, int, list[str], list[str]]:
-    """Найти в SIEM конечные хосты для списка доменов.
+def _lookup_worker(threat_ids: list[int], user_id: int):
+    """Собрать исполнителя фонового поиска по списку доменов.
 
-    Вход в SIEM выполняется один раз на всю пачку. Возвращает количество
-    успешно обработанных доменов, количество ошибок, список сообщений об
-    ошибках и список предупреждений (запрос прошёл, но результат неполный).
+    Возвращает функцию для :mod:`app.services.jobs`: она получает ручку
+    задания и отчитывается о ходе работы после каждого домена. Внутри — та
+    же логика, что раньше выполнялась в обработчике запроса, но результат
+    коммитится по одному домену: оператор видит найденные хосты сразу,
+    не дожидаясь конца всей пачки.
     """
-    config = load_siem_config()
-    filter_template = get_siem_filter_template()
-    group_field = get_siem_group_field()
-    time_from, time_to = _window()
 
-    done = failed = 0
-    messages: list[str] = []
-    warnings: list[str] = []
+    def work(handle) -> str:
+        config = load_siem_config()
+        filter_template = get_siem_filter_template()
+        group_field = get_siem_group_field()
+        time_from, time_to = _window()
 
-    client = SiemClient(config)
-    try:
-        client.login()
-    except SiemError as exc:
-        client.close()
-        for threat in threats:
-            db.session.add(SiemQueryLog(
-                threat_id=threat.id, domain=threat.domain, status=JOB_FAILED,
-                finished_at=datetime.utcnow(), message=str(exc),
-                period_from=time_from, period_to=time_to,
-                user_id=current_user.id,
-            ))
-        db.session.commit()
-        return 0, len(threats), [str(exc)], []
+        done = failed = found = 0
+        truncated_for: list[str] = []
+        first_error = ""
 
-    try:
-        for threat in threats:
-            log = SiemQueryLog(
-                threat_id=threat.id,
-                domain=threat.domain,
-                period_from=time_from,
-                period_to=time_to,
-                user_id=current_user.id,
-            )
-            db.session.add(log)
-            try:
-                result = client.search_hosts(
-                    threat.domain, time_from, time_to,
-                    filter_template, group_field,
+        client = SiemClient(config)
+        try:
+            client.login()
+        except SiemError as exc:
+            for threat_id in threat_ids:
+                threat = db.session.get(ThreatDomain, threat_id)
+                db.session.add(SiemQueryLog(
+                    threat_id=threat_id,
+                    domain=threat.domain if threat else "",
+                    status=JOB_FAILED, finished_at=datetime.utcnow(),
+                    message=str(exc), period_from=time_from,
+                    period_to=time_to, user_id=user_id,
+                ))
+            db.session.commit()
+            client.close()
+            raise JobError(str(exc)) from exc
+
+        try:
+            for index, threat_id in enumerate(threat_ids, start=1):
+                threat = db.session.get(ThreatDomain, threat_id)
+                if threat is None:
+                    continue
+                handle.progress(processed=index - 1,
+                                detail=f"Ищу {threat.domain}")
+
+                log = SiemQueryLog(
+                    threat_id=threat.id, domain=threat.domain,
+                    period_from=time_from, period_to=time_to, user_id=user_id,
                 )
-            except SiemError as exc:
-                log.status = JOB_FAILED
+                db.session.add(log)
+                try:
+                    result = client.search_hosts(
+                        threat.domain, time_from, time_to,
+                        filter_template, group_field,
+                    )
+                except SiemError as exc:
+                    log.status = JOB_FAILED
+                    log.finished_at = datetime.utcnow()
+                    log.message = str(exc)
+                    failed += 1
+                    first_error = first_error or f"{threat.domain}: {exc}"
+                    db.session.commit()
+                    handle.progress(processed=index, failed=failed, found=found)
+                    continue
+
+                db.session.flush()  # закрепить журнал до вставки хостов
+                total_hosts = _apply_hits(threat, result.hosts)
+                threat.siem_checked_at = datetime.utcnow()
+                threat.siem_hosts_count = total_hosts
+                found += len(result.hosts)
+
+                log.status = JOB_SUCCESS
                 log.finished_at = datetime.utcnow()
-                log.message = str(exc)
-                failed += 1
-                messages.append(f"{threat.domain}: {exc}")
-                continue
-
-            db.session.flush()  # закрепить журнальную запись до вставки хостов
-            total_hosts = _apply_hits(threat, result.hosts)
-            threat.siem_checked_at = datetime.utcnow()
-            threat.siem_hosts_count = total_hosts
-
-            log.status = JOB_SUCCESS
-            log.finished_at = datetime.utcnow()
-            log.hosts_found = len(result.hosts)
-            log.events_total = result.total_count
-            log.query_filter = result.query_filter
-            log.message = (
-                f"Найдено хостов: {len(result.hosts)}; "
-                f"событий: {result.total_count}."
-            )
-            if result.truncated:
-                # Постранично ответ не дочитывается, поэтому молчать об этом
-                # нельзя: часть хостов могла не попасть в выборку.
-                log.message += (
-                    f" Ответ упёрся в предел {config.limit} строк — "
-                    "часть хостов могла не войти; сузьте окно поиска "
-                    "или увеличьте предел в настройках."
+                log.hosts_found = len(result.hosts)
+                log.events_total = result.total_count
+                log.query_filter = result.query_filter
+                log.message = (
+                    f"Найдено хостов: {len(result.hosts)}; "
+                    f"событий: {result.total_count}."
                 )
-                warnings.append(f"{threat.domain}: ответ SIEM усечён "
-                                f"по пределу {config.limit} строк.")
-            done += 1
-    finally:
-        client.close()
-        db.session.commit()
+                if result.truncated:
+                    # Постранично ответ не дочитывается, поэтому молчать об
+                    # этом нельзя: часть хостов могла не попасть в выборку.
+                    log.message += (
+                        f" Ответ упёрся в предел {config.limit} строк — "
+                        "часть хостов могла не войти; сузьте окно поиска "
+                        "или увеличьте предел в настройках."
+                    )
+                    truncated_for.append(threat.domain)
+                done += 1
+                db.session.commit()
+                handle.progress(processed=index, failed=failed, found=found)
+        finally:
+            client.close()
+            db.session.commit()
 
-    return done, failed, messages, warnings
+        summary = f"Проверено доменов: {done}. Найдено хостов: {found}."
+        if failed:
+            summary += f" Не удалось проверить: {failed}. {first_error}"
+        if truncated_for:
+            summary += (
+                f" Ответ SIEM усечён по пределу {config.limit} строк "
+                f"для доменов: {', '.join(truncated_for[:5])}."
+            )
+        if not found and not failed:
+            # Ноль хостов — это не обязательно «никто не ходил»: чаще всего
+            # не совпало поле группировки. Подсказываем, куда смотреть.
+            summary += (
+                " Хостов не найдено. Если они точно должны быть, откройте "
+                "«Настройки → Диагностика запроса в SIEM» — там видно, что "
+                "SIEM ответил на самом деле."
+            )
+        return summary
+
+    return work
+
+
+def _start_lookup(threats: list[ThreatDomain], back_url: str):
+    """Запустить фоновый поиск и вернуть оператора на страницу."""
+    running = active_job(JOB_KIND_SIEM)
+    if running is not None:
+        flash(
+            f"Поиск в SIEM уже идёт ({running.processed} из {running.total}). "
+            "Дождитесь его окончания — второй запрос только замедлит SIEM.",
+            "warning",
+        )
+        return redirect(back_url)
+
+    ids = [t.id for t in threats]
+    domains = ", ".join(t.domain for t in threats[:3])
+    if len(threats) > 3:
+        domains += f" и ещё {len(threats) - 3}"
+
+    start(
+        current_app._get_current_object(),
+        kind=JOB_KIND_SIEM,
+        service_id="skydns",
+        title=f"Поиск конечных хостов в SIEM: {domains}",
+        total=len(ids),
+        user_id=current_user.id,
+        target_url=url_for("skydns.hosts"),
+        worker=_lookup_worker(ids, current_user.id),
+    )
+    flash(
+        f"Поиск в SIEM запущен в фоне ({len(ids)} дом.). "
+        "Можно продолжать работу — о результате портал сообщит сам.",
+        "info",
+    )
+    return redirect(back_url)
 
 
 @skydns_bp.route("/domains/<int:threat_id>/lookup", methods=["POST"])
 @operator_required
 def threat_lookup(threat_id: int):
     threat = db.get_or_404(ThreatDomain, threat_id)
-    done, failed, messages, warnings = _lookup([threat])
-    if done:
-        flash(
-            f"SIEM: найдено хостов — {threat.siem_hosts_count}.",
-            "success" if threat.siem_hosts_count else "info",
-        )
-    if warnings:
-        flash("\n".join(warnings), "warning")
-    if failed:
-        flash("\n".join(messages) or "Запрос в SIEM не удался.", "danger")
-    return redirect(url_for("skydns.threat_view", threat_id=threat.id))
+    return _start_lookup(
+        [threat], url_for("skydns.threat_view", threat_id=threat.id)
+    )
 
 
 @skydns_bp.route("/lookup-batch", methods=["POST"])
@@ -537,15 +599,7 @@ def lookup_batch():
             "info",
         )
 
-    done, failed, messages, warnings = _lookup(threats)
-    if done:
-        flash(f"Проверено доменов: {done}.", "success")
-    if warnings:
-        flash("\n".join(warnings[:5]), "warning")
-    if failed:
-        preview = "\n".join(messages[:5])
-        flash(f"Не удалось проверить доменов: {failed}.\n{preview}", "danger")
-    return redirect(_back_url())
+    return _start_lookup(threats, _back_url())
 
 
 # --- Конечные хосты -------------------------------------------------------
@@ -1099,6 +1153,7 @@ def settings():
             skydns_token_set=bool(get_setting(KEY_SKYDNS_TOKEN)),
             siem_filter_default=DEFAULT_SIEM_FILTER,
             probe_methods=PROBE_METHODS,
+            siem_probe_form=SiemProbeForm(),
         )
 
     if (siem_form.submit_siem.data or siem_form.test_siem.data) \
@@ -1165,6 +1220,47 @@ def _save_skydns(form) -> None:
         set_setting(KEY_SKYDNS_TIMEOUT, str(form.report_timeout.data))
     if form.token.data:
         set_setting(KEY_SKYDNS_TOKEN, form.token.data.strip(), is_secret=True)
+
+
+@skydns_bp.route("/settings/siem-probe", methods=["POST"])
+@operator_required
+def siem_probe():
+    """Показать сырой запрос и ответ SIEM по одному домену.
+
+    Отдельная страница, а не всплывающее сообщение: ответ бывает длинным,
+    и разбирать его удобнее целиком.
+    """
+    form = SiemProbeForm()
+    if not form.validate_on_submit():
+        flash("Укажите домен для диагностики.", "danger")
+        return redirect(url_for("skydns.settings"))
+
+    time_from, time_to = _window()
+    client = SiemClient(load_siem_config())
+    try:
+        client.login()
+        report = client.probe(
+            form.domain.data, time_from, time_to,
+            get_siem_filter_template(), get_siem_group_field(),
+        )
+    except SiemError as exc:
+        flash(str(exc), "danger")
+        return redirect(url_for("skydns.settings"))
+    except Exception as exc:  # noqa: BLE001
+        current_app.logger.exception("Ошибка диагностики SIEM")
+        flash(f"Непредвиденная ошибка диагностики: {exc}", "danger")
+        return redirect(url_for("skydns.settings"))
+    finally:
+        client.close()
+
+    return render_template(
+        "skydns/siem_probe.html",
+        domain=form.domain.data,
+        report=report,
+        raw=json.dumps(report, ensure_ascii=False, indent=2, default=str),
+        period_from=time_from,
+        period_to=time_to,
+    )
 
 
 def _test_siem() -> None:

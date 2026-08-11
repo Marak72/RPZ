@@ -300,3 +300,45 @@ def test_extract_error_message_from_siem_body():
 
 def test_extract_error_from_non_json():
     assert "502" in siem_client._extract_error("<html>502 Bad Gateway</html>")
+
+
+# --- поле группировки может быть не одно ----------------------------------
+
+def test_group_field_accepts_a_list():
+    """Адрес конечного хоста в разных источниках лежит в разных полях."""
+    assert siem_client._group_fields("src.ip, src.host") == ["src.ip", "src.host"]
+    assert siem_client._group_fields(" dst.host ") == ["dst.host"]
+    assert siem_client._group_fields("") == ["src.ip"]
+
+
+def test_query_groups_by_every_listed_field():
+    body = siem_client._build_group_query(
+        query_filter='datafield1 = "x"', group_field="src.ip, src.host",
+        time_from=TIME_FROM, time_to=TIME_TO,
+    )
+    assert body["filter"]["groupBy"] == ["src.ip", "src.host"]
+    assert body["filter"]["select"] == ["src.ip", "src.host", "time"]
+    # Считаем по первому полю: агрегат в запросе может быть только один.
+    assert body["filter"]["aggregateBy"][0]["field"] == "src.ip"
+
+
+def test_first_filled_field_becomes_the_address():
+    payload = {"events": [
+        {"src.ip": "", "src.host": "wks-14", "count": 2},
+        {"src.ip": "10.0.0.7", "src.host": "wks-15", "count": 5},
+    ]}
+    hosts = siem_client._parse_group_rows(payload, "src.ip, src.host")
+    assert [h.address for h in hosts] == ["10.0.0.7", "wks-14"]
+
+
+def test_null_string_is_not_an_address():
+    """SIEM отдаёт незаполненное поле строкой 'null' — это не адрес."""
+    payload = {"events": [{"src.ip": "null", "src.host": "wks-1", "count": 1}]}
+    assert siem_client._parse_group_rows(payload, "src.ip, src.host")[0].address \
+        == "wks-1"
+
+
+def test_generated_aggregate_column_is_counted():
+    """Колонку агрегата SIEM называет по самой функции — COUNT(src.ip)."""
+    payload = {"events": [{"src.ip": "10.0.0.1", "COUNT(src.ip)": 42}]}
+    assert siem_client._parse_group_rows(payload, "src.ip")[0].events_count == 42

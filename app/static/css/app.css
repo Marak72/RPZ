@@ -826,3 +826,63 @@ tr:hover .copy-btn { opacity: 1; }
   .main { margin-left: 0; }
   .card { border: 0; box-shadow: none; }
 }
+
+/* ---------- Плашка фоновых заданий -------------------------------------- */
+/* Держится в углу поверх страницы: работа идёт минутами, и оператор в это
+   время ходит по другим разделам портала. */
+.jobs {
+  position: fixed; right: 1rem; bottom: 1rem; z-index: 60;
+  display: flex; flex-direction: column; gap: .5rem;
+  width: min(360px, calc(100vw - 2rem));
+  pointer-events: none;
+}
+.job {
+  pointer-events: auto;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg);
+  padding: .75rem .875rem;
+  animation: job-in .18s ease-out;
+}
+@keyframes job-in { from { opacity: 0; transform: translateY(6px); } }
+.job--success { border-left-color: var(--success); }
+.job--failed { border-left-color: var(--danger); }
+
+.job__head { display: flex; align-items: center; gap: .5rem; }
+.job__title {
+  font-size: .8125rem; font-weight: 600; flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.job__close {
+  background: none; border: 0; cursor: pointer; padding: 0 .25rem;
+  font-size: 1.125rem; line-height: 1; color: var(--text-dim);
+}
+.job__close:hover { color: var(--text); }
+
+.job__spinner {
+  width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid var(--surface-3); border-top-color: var(--primary);
+  animation: job-spin .7s linear infinite;
+}
+@keyframes job-spin { to { transform: rotate(360deg); } }
+
+.job__detail {
+  font-size: .75rem; color: var(--text-muted); margin-top: .25rem;
+  overflow-wrap: anywhere;
+}
+.job__bar {
+  height: 4px; margin-top: .5rem; border-radius: 999px;
+  background: var(--surface-3); overflow: hidden;
+}
+.job__bar i {
+  display: block; height: 100%; width: 0;
+  background: var(--primary); transition: width .3s;
+}
+.job--success .job__bar i { background: var(--success); }
+.job--failed .job__bar i { background: var(--danger); }
+
+.job__foot {
+  display: flex; align-items: center; gap: .5rem; margin-top: .375rem;
+  font-size: .6875rem; color: var(--text-muted);
+}
+.job__link { margin-left: auto; font-weight: 600; }

@@ -4,6 +4,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Токен для запросов из скриптов: Flask-WTF принимает его заголовком. #}
+  <meta name="csrf-token" content="{{ csrf_token() }}">
+  <meta name="jobs-url" content="{{ url_for('jobs.status') }}">
   <title>{% block title %}Портал{% endblock %} · {{ active_service.title }} — Портал SOC</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><text y='20' font-size='20'>🛡️</text></svg>">
@@ -99,6 +102,27 @@
     </main>
   </div>
 </div>
+
+{# Плашка фоновых заданий. Живёт в каркасе портала, а не на странице сервиса:
+   поиск в SIEM идёт минутами, и оператор в это время уходит на другие
+   страницы — прогресс должен следовать за ним. #}
+<div class="jobs" id="jobsTray" data-jobs-tray aria-live="polite"></div>
+
+<template id="jobCardTemplate">
+  <div class="job">
+    <div class="job__head">
+      <span class="job__spinner" data-job-spinner></span>
+      <span class="job__title" data-job-title></span>
+      <button class="job__close" data-job-close aria-label="Скрыть">×</button>
+    </div>
+    <div class="job__detail" data-job-detail></div>
+    <div class="job__bar"><i data-job-bar></i></div>
+    <div class="job__foot">
+      <span data-job-counter></span>
+      <a class="job__link hidden" data-job-link>Открыть</a>
+    </div>
+  </div>
+</template>
 
 <div class="modal-backdrop" id="confirmModal">
   <div class="modal" role="dialog" aria-modal="true">

@@ -95,6 +95,17 @@ class SiemSettingsForm(FlaskForm):
     test_siem = SubmitField("Проверить подключение")
 
 
+class SiemProbeForm(FlaskForm):
+    """Разовый запрос в SIEM с показом сырого ответа.
+
+    Нужна, когда поиск возвращает ноль хостов: по журналу не отличить
+    «событий не нашлось» от «значение группировки лежит в другом поле».
+    """
+
+    domain = StringField("Домен", validators=[DataRequired()])
+    submit_probe = SubmitField("Выполнить запрос")
+
+
 class SkydnsSettingsForm(FlaskForm):
     """Подключение к Proxy Stat API SkyDNS."""
 

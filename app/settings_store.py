@@ -44,7 +44,10 @@ KEY_SIEM_TIMEOUT = "siem_timeout"                # таймаут запроса
 # Фильтр из рабочей практики: домен в SkyDNS-событиях попадает в datafield1
 # (запрошенное имя) либо datafield3 (имя из ответа/CNAME).
 DEFAULT_SIEM_FILTER = 'datafield1 = "{domain}" or datafield3 = "{domain}"'
-DEFAULT_SIEM_GROUP_FIELD = "dst.host"
+# Конечный хост — это тот, кто обратился к домену, то есть источник события.
+# Можно перечислить несколько полей через запятую: адрес возьмётся из первого
+# заполненного (в событиях разных источников он лежит по-разному).
+DEFAULT_SIEM_GROUP_FIELD = "src.ip"
 DEFAULT_SIEM_TIMEOUT = 120
 
 DEFAULT_SKYDNS_TZ = "Asia/Yekaterinburg"

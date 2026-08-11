@@ -51,6 +51,14 @@ THREAT_SOURCE_MANUAL = "manual"
 # Результаты обращений к внешним системам (SkyDNS, SIEM).
 JOB_SUCCESS = "success"
 JOB_FAILED = "failed"
+# Состояния фоновых заданий: до JOB_SUCCESS/JOB_FAILED задание живёт здесь.
+JOB_QUEUED = "queued"
+JOB_RUNNING = "running"
+JOB_ACTIVE_STATUSES = (JOB_QUEUED, JOB_RUNNING)
+
+# Виды фоновых заданий.
+JOB_KIND_SIEM = "siem_lookup"
+JOB_KIND_SKYDNS = "skydns_sync"
 
 # Откуда узнали про конечный хост.
 HOST_SOURCE_SIEM = "siem"      # группировка событий MaxPatrol SIEM
@@ -831,3 +839,95 @@ class IocHash(db.Model):
 
     def __repr__(self) -> str:
         return f"<IocHash {self.hash_type}:{self.value[:12]}…>"
+
+
+class BackgroundJob(db.Model):
+    """Длительная работа, вынесенная из запроса в фоновый поток.
+
+    Поиск конечных хостов в SIEM — это отдельный запрос на каждый домен, и
+    пачка доменов легко занимает минуты. Пока работа шла прямо в обработчике
+    запроса, браузер просто висел на кнопке, а веб-сервер мог оборвать
+    соединение по таймауту. Теперь обработчик заводит запись здесь, отдаёт
+    страницу сразу, а поток дописывает прогресс — портал показывает его
+    плашкой и не мешает работать дальше.
+
+    Состояние живёт в базе, а не в памяти процесса: за gunicorn работает
+    несколько рабочих процессов, и запрос о ходе задания может прийти не в
+    тот процесс, который его выполняет.
+    """
+
+    __tablename__ = "background_jobs"
+
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(40), nullable=False, index=True)
+    # Сервис портала, к которому относится задание (для плашки и ссылок).
+    service_id = db.Column(db.String(40), nullable=False, default="")
+    title = db.Column(db.String(200), nullable=False, default="")
+    status = db.Column(db.String(20), nullable=False, default=JOB_QUEUED, index=True)
+
+    total = db.Column(db.Integer, nullable=False, default=0)
+    processed = db.Column(db.Integer, nullable=False, default=0)
+    failed = db.Column(db.Integer, nullable=False, default=0)
+    result_count = db.Column(db.Integer, nullable=False, default=0)
+
+    # Что делается прямо сейчас — показывается в плашке под заголовком.
+    detail = db.Column(db.String(300), default="")
+    # Итог работы или текст ошибки.
+    message = db.Column(db.Text, default="")
+    # Куда вести оператора по клику на завершившееся задание.
+    target_url = db.Column(db.String(500), default="")
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+    # Признак жизни: поток обновляет его на каждом шаге. Если процесс умер,
+    # задание навсегда осталось бы «выполняется» — по этой метке видно, что
+    # его больше некому доделать.
+    heartbeat_at = db.Column(db.DateTime)
+    # Когда оператор закрыл плашку завершённого задания.
+    dismissed_at = db.Column(db.DateTime)
+
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), index=True)
+    user = db.relationship("User")
+
+    @property
+    def is_active(self) -> bool:
+        return self.status in JOB_ACTIVE_STATUSES
+
+    @property
+    def percent(self) -> int:
+        if not self.total:
+            return 0
+        return min(100, int(self.processed * 100 / self.total))
+
+    @property
+    def status_title(self) -> str:
+        return {
+            JOB_QUEUED: "в очереди",
+            JOB_RUNNING: "выполняется",
+            JOB_SUCCESS: "готово",
+            JOB_FAILED: "ошибка",
+        }.get(self.status, self.status)
+
+    def as_dict(self) -> dict:
+        """Представление для плашки прогресса в браузере."""
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "service": self.service_id,
+            "title": self.title,
+            "status": self.status,
+            "status_title": self.status_title,
+            "active": self.is_active,
+            "total": self.total,
+            "processed": self.processed,
+            "failed": self.failed,
+            "found": self.result_count,
+            "percent": self.percent,
+            "detail": self.detail or "",
+            "message": self.message or "",
+            "url": self.target_url or "",
+        }
+
+    def __repr__(self) -> str:
+        return f"<BackgroundJob {self.kind} {self.status} {self.processed}/{self.total}>"

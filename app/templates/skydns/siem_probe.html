@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Диагностика SIEM{% endblock %}
+{% block subheading %}<div class="topbar__sub">{{ domain }}</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Что мы спросили у SIEM и что он ответил</h2>
+    <p>Разовый запрос по домену <code>{{ domain }}</code> за период
+       {{ period_from.strftime('%d.%m.%Y %H:%M') }} —
+       {{ period_to.strftime('%d.%m.%Y %H:%M') }}.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('skydns.settings') }}">← К настройкам</a>
+    <button type="button" class="btn" data-copy="{{ raw }}">
+      {{ ico.icon('copy') }} Скопировать ответ
+    </button>
+  </div>
+</div>
+
+{# Три числа ниже отвечают на главный вопрос: где обрывается цепочка —
+   на самом запросе или уже на разборе ответа. #}
+<div class="grid grid--stats">
+  <div class="stat stat--info">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('activity') }}</span>
+      <span class="stat__label">Событий по фильтру</span>
+    </div>
+    <div class="stat__value">{{ report.total_count if report.total_count is not none else '—' }}</div>
+    <div class="stat__hint">поле totalCount в ответе</div>
+  </div>
+  <div class="stat">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('list') }}</span>
+      <span class="stat__label">Строк в ответе</span>
+    </div>
+    <div class="stat__value">{{ report.rows_returned }}</div>
+    <div class="stat__hint">сгруппированных записей</div>
+  </div>
+  <div class="stat {% if report.parsed %}stat--success{% else %}stat--danger{% endif %}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('server') }}</span>
+      <span class="stat__label">Хостов распознано</span>
+    </div>
+    <div class="stat__value">{{ report.parsed|length }}</div>
+    <div class="stat__hint">адреса, которые возьмёт портал</div>
+  </div>
+</div>
+
+<div class="alert alert--{{ 'success' if report.parsed else 'warning' }} mt-2">
+  {{ ico.icon('info') }}
+  <div class="alert__text">
+    {% if report.parsed %}
+    Всё сходится: события находятся и адреса из них извлекаются. Если при
+    обычном поиске хостов всё равно ноль — сверьте период поиска.
+    {% elif not report.rows_returned %}
+    <b>SIEM не вернул ни одной строки.</b> Значит, дело не в разборе ответа,
+    а в самом запросе: не тот фильтр или не тот период. Вставьте фильтр из
+    карточки ниже в интерфейс SIEM и сравните результат руками.
+    {% else %}
+    <b>Строки пришли, но адрес из них не достаётся.</b> Значит, поле
+    группировки в этой инсталляции называется иначе. Посмотрите ключи строки
+    ниже и укажите нужное имя в настройках — их можно перечислить через
+    запятую, адрес возьмётся из первого заполненного.
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid grid--2 mt-2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('upload') }}<span class="card__title">Что ушло в SIEM</span>
+    </div>
+    <div class="card__body">
+      <div class="kv">
+        <dt>Фильтр</dt><dd class="mono">{{ report.filter }}</dd>
+        <dt>Группировка</dt><dd class="mono">{{ report.group_fields|join(', ') }}</dd>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('hash') }}<span class="card__title">Ключи строки ответа</span>
+    </div>
+    <div class="card__body">
+      {% if report.row_keys %}
+      <p class="help">Так SIEM назвал колонки. Зелёным — то, что портал ищет
+        сейчас; если адрес лежит в другой колонке, впишите её имя в настройки.</p>
+      <div class="inline">
+        {% for key in report.row_keys %}
+        <span class="badge {% if key in report.group_fields %}badge--success{% else %}badge--neutral{% endif %}">{{ key }}</span>
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty">
+        <div class="empty__title">Строк нет</div>
+        <div class="empty__text">Показывать нечего — ответ пустой.</div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% if report.parsed %}
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('server') }}<span class="card__title">Что портал распознал</span>
+  </div>
+  <div class="card__body card__body--flush">
+    <table class="table">
+      <thead><tr><th>Адрес</th><th class="num">Событий</th></tr></thead>
+      <tbody>
+        {% for row in report.parsed %}
+        <tr><td class="value">{{ row.address }}</td>
+            <td class="num">{{ row.events }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card mt-2">
+  <div class="card__header">
+    {{ ico.icon('download') }}<span class="card__title">Запрос и ответ целиком</span>
+  </div>
+  <div class="card__body">
+    <p class="help">Тело запроса и первые пять строк ответа как есть. Пароля и
+      токена здесь нет — они уходят только в заголовках.</p>
+    <pre class="log log--dark">{{ raw }}</pre>
+  </div>
+</div>
+{% endblock %}

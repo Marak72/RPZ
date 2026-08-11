@@ -489,3 +489,75 @@ def test_category_filter_shows_titles_not_ids(client, monkeypatch):
     body = client.get("/skydns/domains").get_data(as_text=True)
     assert '<option value="3"' in body
     assert ">Malware</option>" in body
+
+
+# --- поиск в SIEM идёт в фоне ---------------------------------------------
+
+def test_lookup_returns_immediately_and_creates_a_job(client):
+    """Страница не должна ждать SIEM: работа уходит в фоновое задание."""
+    from app.models import JOB_KIND_SIEM, BackgroundJob
+
+    threat_id = _add_threat()
+    response = client.post(f"/skydns/domains/{threat_id}/lookup")
+    assert response.status_code == 302
+
+    job = BackgroundJob.query.one()
+    assert job.kind == JOB_KIND_SIEM
+    assert job.service_id == "skydns"
+    assert job.total == 1
+    assert "obltub.ru" in job.title
+
+
+def test_job_summary_counts_domains_and_hosts(client):
+    from app.models import BackgroundJob
+
+    _add_threat("a-evil.ru")
+    _add_threat("b-evil.ru")
+    client.post("/skydns/lookup-batch")
+
+    job = BackgroundJob.query.one()
+    assert "Проверено доменов: 2" in job.message
+    assert "Найдено хостов: 4" in job.message
+
+
+def test_second_lookup_is_refused_while_the_first_runs(client):
+    """Два поиска разом только поделят между собой и без того небыстрый SIEM."""
+    from datetime import datetime
+
+    from app.models import JOB_KIND_SIEM, JOB_RUNNING, BackgroundJob
+
+    db.session.add(BackgroundJob(
+        kind=JOB_KIND_SIEM, status=JOB_RUNNING, title="идёт",
+        heartbeat_at=datetime.utcnow(),
+    ))
+    db.session.commit()
+
+    threat_id = _add_threat()
+    client.post(f"/skydns/domains/{threat_id}/lookup")
+
+    # Новое задание не заведено, домен остался непроверенным.
+    assert BackgroundJob.query.count() == 1
+    assert db.session.get(ThreatDomain, threat_id).siem_checked_at is None
+
+
+def test_empty_result_points_to_the_probe_page(client):
+    """Ноль хостов чаще означает не «никто не ходил», а промах по полю."""
+    from app.models import BackgroundJob
+
+    FakeSiemClient.hits = ()
+    _add_threat()
+    client.post("/skydns/lookup-batch")
+
+    assert "Диагностика" in BackgroundJob.query.one().message
+
+
+def test_login_failure_marks_the_job_as_failed(client):
+    from app.models import JOB_FAILED, BackgroundJob
+
+    FakeSiemClient.login_error = "SIEM отклонил вход (401)."
+    _add_threat()
+    client.post("/skydns/lookup-batch")
+
+    job = BackgroundJob.query.one()
+    assert job.status == JOB_FAILED
+    assert "401" in job.message

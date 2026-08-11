@@ -31,9 +31,12 @@ def create_app(config_class: type = Config) -> Flask:
     # Регистрируем модели (нужно для миграций и user_loader).
     from . import models  # noqa: F401
 
+    _configure_sqlite(app)
+
     from .admin.routes import admin_bp
     from .auth.routes import auth_bp
     from .hub.routes import hub_bp
+    from .jobs.routes import jobs_bp
     from .main.routes import main_bp
     from .skydns.routes import skydns_bp
     from .tasks.routes import tasks_bp
@@ -41,6 +44,7 @@ def create_app(config_class: type = Config) -> Flask:
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(hub_bp)
+    app.register_blueprint(jobs_bp)
     app.register_blueprint(main_bp)
     app.register_blueprint(skydns_bp)
     app.register_blueprint(tasks_bp)
@@ -50,6 +54,33 @@ def create_app(config_class: type = Config) -> Flask:
     _register_error_handlers(app)
     _register_cli(app)
     return app
+
+
+def _configure_sqlite(app: Flask) -> None:
+    """Разрешить SQLite одновременную работу фоновых заданий и страниц.
+
+    По умолчанию запись в SQLite блокирует базу целиком, и пока фоновый
+    поток дописывает найденные хосты, любая страница портала падала бы с
+    «database is locked». Журнал WAL разводит читателей и писателя, а
+    busy_timeout заставляет второго писателя подождать, а не сдаться сразу.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    if not str(app.config.get("SQLALCHEMY_DATABASE_URI", "")).startswith("sqlite"):
+        return
+
+    @event.listens_for(Engine, "connect")
+    def _set_pragmas(dbapi_connection, _record):  # pragma: no cover - драйвер
+        if type(dbapi_connection).__module__.split(".")[0] != "sqlite3":
+            return
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=15000")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
 
 
 def _register_template_helpers(app: Flask) -> None:
