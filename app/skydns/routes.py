@@ -708,7 +708,7 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
 
                 results, errors = _search_chunk(
                     client, threats, time_from, time_to,
-                    filter_template, group_field,
+                    filter_template, group_field, handle,
                 )
                 for domain, message in errors.items():
                     log = logs[domain]
@@ -722,7 +722,7 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
                     processed += len(chunk)
                     db.session.commit()
                     handle.progress(processed=processed, failed=failed,
-                                    found=found)
+                                    found=found, error=first_error)
                     continue
 
                 db.session.flush()  # закрепить журналы до вставки хостов
@@ -761,7 +761,8 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
 
                 processed += len(threats)
                 db.session.commit()
-                handle.progress(processed=processed, failed=failed, found=found)
+                handle.progress(processed=processed, failed=failed,
+                                found=found, error=first_error)
         finally:
             client.close()
             db.session.commit()
@@ -788,7 +789,7 @@ def _lookup_worker(threat_ids: list[int], user_id: int):
 
 
 def _search_chunk(client, threats, time_from, time_to, filter_template,
-                  group_field):
+                  group_field, handle=None):
     """Спросить пачку доменов, а при отказе — каждый по отдельности.
 
     Пачка уходит одним фильтром, поэтому отказ по ней ничего не говорит о
@@ -811,6 +812,10 @@ def _search_chunk(client, threats, time_from, time_to, filter_template,
 
     results, errors = {}, {}
     for domain in names:
+        if handle is not None:
+            # Переспрос по одному — самая долгая часть работы; отмену здесь надо
+            # замечать сразу, а не через двадцать запросов.
+            handle.check()
         try:
             results.update(client.search_many(
                 [domain], time_from, time_to, filter_template, group_field,

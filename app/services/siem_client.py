@@ -788,9 +788,16 @@ def _build_group_query(
     """
     fields = _group_fields(group_field)
     grouping = fields if group_by is None else group_by
+    # Повтор имени в select SIEM отклоняет: «An item with the same key has
+    # already been added». Списки полей собираются из нескольких наборов
+    # (настроенные + адресные + те, где лежит имя домена), и пересечения в
+    # них неизбежны — поэтому чистим здесь, а не в каждом вызывающем месте.
+    chosen = list(dict.fromkeys(
+        select if select is not None else fields + ["time"]
+    ))
     return {
         "filter": {
-            "select": select if select is not None else fields + ["time"],
+            "select": chosen,
             "where": query_filter,
             "orderBy": [{"field": "time", "sortOrder": "descending"}],
             "groupBy": grouping,

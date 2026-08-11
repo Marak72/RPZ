@@ -104,6 +104,26 @@ def _register_template_helpers(app: Flask) -> None:
     from .web_utils import current_url
 
     app.jinja_env.globals["current_url"] = current_url
+    app.jinja_env.globals["asset_version"] = _asset_version(app)
+
+
+def _asset_version(app: Flask) -> str:
+    """Метка версии для ссылок на css/js.
+
+    Без неё браузер и обратный прокси продолжают отдавать старые файлы
+    после обновления: страница уже новая, а скрипт к ней — прежний, и
+    кнопки просто не работают. Метка меняется вместе с файлами, поэтому
+    вопрос «почему после git pull ничего не изменилось» не возникает.
+    """
+    newest = 0.0
+    for name in ("css/app.css", "js/app.js"):
+        try:
+            newest = max(newest, os.path.getmtime(
+                os.path.join(app.static_folder, name)
+            ))
+        except OSError:
+            continue
+    return str(int(newest))
 
 
 def _register_portal_context(app: Flask) -> None:

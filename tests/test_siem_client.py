@@ -785,3 +785,68 @@ def test_legacy_filter_missed_subdomains():
     assert _fields_matched(
         LEGACY_SIEM_FILTERS[0], DNS_EVENT["datafield6"], DNS_EVENT
     ) == []
+
+
+# --- select не должен содержать повторов -----------------------------------
+#
+# Боевой отказ: «SIEM вернул ошибку 400 на запрос событий. An item with the
+# same key has already been added. Key: dst.fqdn». Список полей собирается
+# из нескольких наборов — настроенные, адресные и те, где лежит имя домена, —
+# и пересечения в них неизбежны.
+
+def _select_of(client_call_body: dict) -> list:
+    return client_call_body["filter"]["select"]
+
+
+def test_select_has_no_duplicates_when_lists_overlap():
+    body = siem_client._build_group_query(
+        query_filter="x", group_field="src.ip",
+        time_from=TIME_FROM, time_to=TIME_TO,
+        select=(siem_client._select_for(["src.ip"])
+                + list(siem_client.DOMAIN_FIELDS)),
+        group_by=[],
+    )
+    select = _select_of(body)
+    assert len(select) == len(set(select)), "SIEM отклоняет повтор имени в select"
+    # Ничего при этом не потерялось.
+    for name in ("src.ip", "dst.fqdn", "datafield6", "time"):
+        assert name in select, name
+
+
+def test_batch_search_sends_a_clean_select(monkeypatch):
+    """Тот же запрос, что уходил в бою, — теперь без дублей."""
+    config = siem_client.SiemConfig(base_url="https://siem.local", limit=100)
+    client = siem_client.SiemClient(config)
+    seen = []
+
+    def fake_open(request, timeout=None):
+        seen.append(json.loads(request.data.decode()))
+        return _FakeResponse(json.dumps({"totalCount": 0, "events": []}))
+
+    monkeypatch.setattr(client._opener, "open", fake_open)
+    client.search_many(
+        ["a.ru", "b.ru"], TIME_FROM, TIME_TO,
+        'datafield1 = "{domain}" or datafield3 = "{domain}"'
+        ' or datafield6 = "{domain}"',
+        "src.ip",
+    )
+
+    select = _select_of(seen[0])
+    assert len(select) == len(set(select))
+
+
+def test_single_search_sends_a_clean_select(monkeypatch):
+    config = siem_client.SiemConfig(base_url="https://siem.local", limit=100)
+    client = siem_client.SiemClient(config)
+    seen = []
+
+    def fake_open(request, timeout=None):
+        seen.append(json.loads(request.data.decode()))
+        return _FakeResponse(json.dumps({"totalCount": 0, "events": []}))
+
+    monkeypatch.setattr(client._opener, "open", fake_open)
+    client.search_hosts("a.ru", TIME_FROM, TIME_TO,
+                        'datafield1 = "{domain}"', "src.ip, src.host")
+
+    select = _select_of(seen[0])
+    assert len(select) == len(set(select))

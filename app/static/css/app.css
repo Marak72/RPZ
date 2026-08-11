@@ -898,3 +898,5 @@ tr:hover .copy-btn { opacity: 1; }
 }
 .job__cancel:hover { color: var(--danger); }
 .job__cancel:disabled { cursor: default; text-decoration: none; }
+
+.job__detail--error { color: var(--danger); }

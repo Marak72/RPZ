@@ -63,8 +63,23 @@ class JobHandle:
     def job(self) -> BackgroundJob:
         return db.session.get(BackgroundJob, self.job_id)
 
+    def check(self) -> None:
+        """Прерваться, если задание сняли.
+
+        Отдельно от :meth:`progress`, потому что вызывать её имеет смысл
+        куда чаще, чем отчитываться: между двумя отчётами исполнитель может
+        просидеть на медленном запросе не одну минуту, и всё это время
+        нажатая оператором отмена выглядела бы как «не работает».
+        """
+        job = self.job
+        if job is None:
+            raise JobCancelled("Задание удалено.")
+        if not job.is_active:
+            raise JobCancelled("Задание снято.")
+
     def progress(self, processed: int | None = None, detail: str = "",
-                 failed: int | None = None, found: int | None = None) -> None:
+                 failed: int | None = None, found: int | None = None,
+                 error: str = "") -> None:
         job = self.job
         if job is None:
             raise JobCancelled("Задание удалено.")
@@ -81,6 +96,11 @@ class JobHandle:
             job.result_count = found
         if detail:
             job.detail = detail[:300]
+        if error and not job.message:
+            # Первая ошибка показывается в плашке сразу, не дожидаясь конца
+            # задания: иначе оператор час смотрит на растущий счётчик ошибок
+            # и не знает, что именно отвечает SIEM.
+            job.message = error[:2000]
         job.heartbeat_at = datetime.utcnow()
         db.session.commit()
 

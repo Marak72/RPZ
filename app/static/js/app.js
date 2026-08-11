@@ -380,7 +380,8 @@
       // Перерисовываем, только когда что-то изменилось: иначе плашка
       // мигала бы каждые две секунды.
       var signature = jobs.map(function (j) {
-        return [j.id, j.status, j.processed, j.found, j.detail].join(":");
+        return [j.id, j.status, j.processed, j.found, j.failed,
+                j.detail, j.message].join(":");
       }).join("|");
       if (signature === lastSignature) return;
       lastSignature = signature;
@@ -399,10 +400,19 @@
         "hidden", !job.active
       );
 
+      // Пока задание идёт, показываем, что оно делает; но если пошли
+      // ошибки — важнее текст первой из них, иначе оператор смотрит на
+      // растущий счётчик и не знает, что отвечает внешняя система.
       var detail = card.querySelector("[data-job-detail]");
-      detail.textContent = job.active
-        ? (job.detail || "Запускается…")
-        : job.message;
+      if (!job.active) {
+        detail.textContent = job.message;
+      } else if (job.failed && job.message) {
+        detail.textContent = job.message;
+        detail.classList.add("job__detail--error");
+      } else {
+        detail.textContent = job.detail || "Запускается…";
+        detail.classList.remove("job__detail--error");
+      }
 
       var bar = card.querySelector("[data-job-bar]");
       bar.style.width = (job.active ? job.percent : 100) + "%";
