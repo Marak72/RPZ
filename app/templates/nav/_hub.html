@@ -6,7 +6,7 @@
 <div class="nav-group">
   <div class="nav-group__title">Быстрый переход</div>
   {% if 'fstec' in allowed %}
-  <a class="nav-link" href="{{ url_for('main.push_view') }}">
+  <a class="nav-link" href="{{ url_for('fstec.push_view') }}">
     {{ ico.icon('upload') }} Выгрузка в RPZ
     {% if nav_counts.pending %}
     <span class="nav-link__count nav-link__count--alert">{{ nav_counts.pending }}</span>
@@ -25,7 +25,7 @@
   {% endif %}
   {% if current_user.is_operator %}
   {% if 'fstec' in allowed %}
-  <a class="nav-link" href="{{ url_for('main.settings') }}">
+  <a class="nav-link" href="{{ url_for('fstec.settings') }}">
     {{ ico.icon('settings') }} Настройки ФСТЭК
   </a>
   {% endif %}

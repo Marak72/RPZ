@@ -1,0 +1,67 @@
+{# Боковая навигация сервиса «РПЗ ФСТЭК». Переменная ep задана в base.html. #}
+<div class="nav-group">
+  <a class="nav-link {% if ep == 'fstec.dashboard' %}is-active{% endif %}" href="{{ url_for('fstec.dashboard') }}">
+    {{ ico.icon('grid') }} Дашборд
+  </a>
+</div>
+
+<div class="nav-group">
+  <div class="nav-group__title">Индикаторы</div>
+  <a class="nav-link {% if ep in ('fstec.documents', 'fstec.letter_view') %}is-active{% endif %}"
+     href="{{ url_for('fstec.documents') }}">
+    {{ ico.icon('inbox') }} Письма ФСТЭК
+    <span class="nav-link__count">{{ nav_counts.documents }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'fstec.candidates' and request.args.get('type') != 'ip' %}is-active{% endif %}"
+     href="{{ url_for('fstec.candidates', type='domain') }}">
+    {{ ico.icon('globe') }} Домены
+    <span class="nav-link__count">{{ nav_counts.domains }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'fstec.candidates' and request.args.get('type') == 'ip' %}is-active{% endif %}"
+     href="{{ url_for('fstec.candidates', type='ip') }}">
+    {{ ico.icon('server') }} IP-адреса
+    <span class="nav-link__count">{{ nav_counts.ips }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'fstec.urls' %}is-active{% endif %}" href="{{ url_for('fstec.urls') }}">
+    {{ ico.icon('link') }} URL с путями
+    <span class="nav-link__count">{{ nav_counts.urls }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'fstec.iocs' %}is-active{% endif %}" href="{{ url_for('fstec.iocs') }}">
+    {{ ico.icon('hash') }} Хеши
+    <span class="nav-link__count">{{ nav_counts.hashes }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'fstec.search' %}is-active{% endif %}" href="{{ url_for('fstec.search') }}">
+    {{ ico.icon('search') }} Поиск по всем
+  </a>
+</div>
+
+<div class="nav-group">
+  <div class="nav-group__title">RPZ-зона</div>
+  <a class="nav-link {% if ep in ('fstec.rpz_view', 'fstec.rpz_history', 'fstec.rpz_snapshot_view') %}is-active{% endif %}"
+     href="{{ url_for('fstec.rpz_view') }}">
+    {{ ico.icon('lock') }} Заблокировано
+    <span class="nav-link__count">{{ nav_counts.blocked }}</span>
+  </a>
+  <a class="nav-link {% if ep in ('fstec.push_view', 'fstec.push_history', 'fstec.push_log_view') %}is-active{% endif %}"
+     href="{{ url_for('fstec.push_view') }}">
+    {{ ico.icon('upload') }} Выгрузка
+    {% if nav_counts.pending %}
+    <span class="nav-link__count nav-link__count--alert">{{ nav_counts.pending }}</span>
+    {% endif %}
+  </a>
+</div>
+
+{% if current_user.is_operator %}
+<div class="nav-group">
+  <div class="nav-group__title">Действия</div>
+  <a class="nav-link {% if ep in ('fstec.upload', 'fstec.preview_save') %}is-active{% endif %}" href="{{ url_for('fstec.upload') }}">
+    {{ ico.icon('upload') }} Загрузить письмо
+  </a>
+  <a class="nav-link {% if ep == 'fstec.manual_add' %}is-active{% endif %}" href="{{ url_for('fstec.manual_add') }}">
+    {{ ico.icon('play') }} Добавить вручную
+  </a>
+  <a class="nav-link {% if ep == 'fstec.settings' %}is-active{% endif %}" href="{{ url_for('fstec.settings') }}">
+    {{ ico.icon('settings') }} Настройки
+  </a>
+</div>
+{% endif %}

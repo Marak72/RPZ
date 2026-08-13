@@ -1,11 +1,19 @@
-"""Фабрика приложения Flask."""
+"""Фабрика приложения Flask.
+
+Портал собирается из двух частей:
+
+  * оболочка — ядро (``app/core``), вход, учётные записи, главная и фоновые
+    задания. Она едина и одинакова для всех сервисов;
+  * сервисы (``app/services/*``) — самостоятельные приложения, каждое целиком
+    в своей папке. Здесь они только подключаются.
+"""
 import os
 
 import click
 from flask import Flask, render_template
 
 from config import INSTANCE_DIR, Config
-from .extensions import csrf, db, login_manager, migrate
+from .core.extensions import csrf, db, login_manager, migrate
 
 
 def create_app(config_class: type = Config) -> Flask:
@@ -28,8 +36,9 @@ def create_app(config_class: type = Config) -> Flask:
     csrf.init_app(app)
     login_manager.init_app(app)
 
-    # Регистрируем модели (нужно для миграций и user_loader).
-    from . import models  # noqa: F401
+    # Модели ядра: их должен видеть SQLAlchemy до создания таблиц и миграций.
+    # Модели сервисов подтягиваются вместе с самими сервисами (ниже).
+    from .core import models  # noqa: F401
 
     _configure_sqlite(app)
 
@@ -37,17 +46,17 @@ def create_app(config_class: type = Config) -> Flask:
     from .auth.routes import auth_bp
     from .hub.routes import hub_bp
     from .jobs.routes import jobs_bp
-    from .main.routes import main_bp
-    from .skydns.routes import skydns_bp
-    from .tasks.routes import tasks_bp
+    from .services import SERVICE_BLUEPRINTS
 
+    # Оболочка портала.
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_bp)
     app.register_blueprint(hub_bp)
     app.register_blueprint(jobs_bp)
-    app.register_blueprint(main_bp)
-    app.register_blueprint(skydns_bp)
-    app.register_blueprint(tasks_bp)
+    # Сервисы. Чтобы добавить новый сервис, достаточно завести папку в
+    # app/services и внести его в реестр app/portal.py.
+    for blueprint in SERVICE_BLUEPRINTS:
+        app.register_blueprint(blueprint)
 
     _register_template_helpers(app)
     _register_portal_context(app)
@@ -101,7 +110,7 @@ def _configure_sqlite(app: Flask) -> None:
 
 def _register_template_helpers(app: Flask) -> None:
     """Помощники, нужные шаблонам всех сервисов."""
-    from .web_utils import current_url
+    from .core.web_utils import current_url
 
     app.jinja_env.globals["current_url"] = current_url
     app.jinja_env.globals["asset_version"] = _asset_version(app)
@@ -224,7 +233,7 @@ def _register_cli(app: Flask) -> None:
     def create_user(username: str, role: str, full_name: str,
                     password: str) -> None:
         """Создать пользователя портала (со всеми сервисами)."""
-        from .models import User, UserService
+        from .core.models import User, UserService
         from .portal import SERVICES
 
         if User.query.filter_by(username=username).first():
@@ -245,7 +254,7 @@ def _register_cli(app: Flask) -> None:
     @click.argument("username")
     def grant_admin(username: str) -> None:
         """Выдать существующему пользователю роль администратора."""
-        from .models import ROLE_ADMIN, User
+        from .core.models import ROLE_ADMIN, User
 
         user = User.query.filter_by(username=username).first()
         if not user:
@@ -260,7 +269,7 @@ def _register_cli(app: Flask) -> None:
     @click.password_option()
     def set_password(username: str, password: str) -> None:
         """Сменить пароль существующего пользователя."""
-        from .models import User
+        from .core.models import User
 
         user = User.query.filter_by(username=username).first()
         if not user:
@@ -278,7 +287,7 @@ def _register_cli(app: Flask) -> None:
         задании остаётся «выполняется» и блокирует запуск следующего. Эта
         команда закрывает такие записи сразу, не дожидаясь таймаута.
         """
-        from .services.jobs import cancel_all
+        from .core.background import cancel_all
 
         count = cancel_all()
         click.echo(f"Снято незавершённых заданий: {count}.")

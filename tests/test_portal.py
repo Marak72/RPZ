@@ -10,8 +10,8 @@ from cryptography.fernet import Fernet
 from config import Config
 
 from app import create_app
-from app.extensions import db
-from app.models import User, UserService
+from app.core.extensions import db
+from app.core.models import User, UserService
 from app.portal import SERVICES
 
 
@@ -138,7 +138,7 @@ def _make_task(client):
         "title": "Проверить", "status": "backlog", "priority": "normal",
         "assignee_id": "0", "service_id": "", "submit": "1",
     }, headers=PREFIX_HEADERS, follow_redirects=False)
-    from app.models import Task
+    from app.services.tasks.models import Task
     return Task.query.one()
 
 

@@ -2,7 +2,7 @@
 
 Сеть и база не задействуются: проверяется только разбор имён.
 """
-from app.services import domains as dm
+from app.services.skydns.lib import domains as dm
 
 
 # --- корневой домен -------------------------------------------------------

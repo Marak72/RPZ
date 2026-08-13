@@ -54,7 +54,7 @@ def _fill_roots() -> None:
     from pathlib import Path
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from app.services.domains import registrable
+    from app.services.skydns.lib.domains import registrable
 
     bind = op.get_bind()
     rows = bind.execute(sa.text("SELECT id, domain FROM threat_domains")).fetchall()

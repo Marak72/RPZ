@@ -127,6 +127,55 @@
     }
   });
 
+  /* --- Обязательное поле у массового действия --------------------------
+     Сервер и так не примет решение без причины, но если проверить это
+     только на сервере, страница перезагрузится и СНИМЕТ все галочки:
+     отметив полсотни записей, оператор потеряет отбор из-за пустой
+     строки. Поэтому останавливаем отправку здесь, ничего не теряя. */
+  document.addEventListener(
+    "click",
+    function (e) {
+      var btn = e.target.closest("[data-require-field]");
+      if (!btn) return;
+      var form = btn.form || btn.closest("form");
+      if (!form) return;
+      var field = form.querySelector('[name="' + btn.dataset.requireField + '"]');
+      if (!field || field.value.trim()) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+      field.classList.add("is-invalid");
+      field.focus();
+      var hint = form.querySelector("[data-require-hint]");
+      if (hint) hint.hidden = false;
+    },
+    true // до обработчика подтверждения: иначе сначала всплывёт диалог
+  );
+
+  document.addEventListener("input", function (e) {
+    if (!e.target.classList || !e.target.classList.contains("is-invalid")) return;
+    if (!e.target.value.trim()) return;
+    e.target.classList.remove("is-invalid");
+    var form = e.target.form;
+    var hint = form && form.querySelector("[data-require-hint]");
+    if (hint) hint.hidden = true;
+  });
+
+  /* --- Подставить значение в поле одним щелчком ------------------------
+     Используется на предпросмотре загрузки: приложение без номера
+     отправляется в нужное письмо пачки нажатием, а не набором номера. */
+  document.addEventListener("click", function (e) {
+    var chip = e.target.closest("[data-set-field]");
+    if (!chip) return;
+    e.preventDefault();
+    var form = chip.closest("form");
+    var field = form && form.querySelector('[name="' + chip.dataset.setField + '"]');
+    if (!field) return;
+    field.value = chip.dataset.setValue || "";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.focus();
+  });
+
   /* --- Копирование в буфер --------------------------------------------- */
   function copyText(text, btn) {
     var done = function () {

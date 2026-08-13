@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Письма ФСТЭК{% endblock %}
+{% block subheading %}<div class="topbar__sub">Архив писем и связанных индикаторов</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Письма ФСТЭК</h2>
+    <p>Письмо — это номер и дата. Все файлы, пришедшие с ним (само письмо и приложения),
+       и все извлечённые индикаторы собраны в одной карточке.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('fstec.documents_csv') }}"
+       title="Индикаторы всех писем с привязкой к письму">
+      {{ ico.icon('download') }} Экспорт CSV
+    </a>
+    {% if current_user.is_operator %}
+    <a class="btn btn--primary" href="{{ url_for('fstec.upload') }}">{{ ico.icon('upload') }} Загрузить письма</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Номер письма, тема, имя файла" data-search-focus>
+      </div>
+      <button class="btn btn--sm">Найти</button>
+      {% if q %}<a class="btn btn--ghost btn--sm" href="{{ url_for('fstec.documents') }}">Сбросить</a>{% endif %}
+    </form>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Письмо</th><th>Дата</th><th>Файлы</th><th>Индикаторы</th>
+          <th>Загружено</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in items %}
+        {% set st = stats[d.id] %}
+        <tr>
+          <td>
+            <a href="{{ url_for('fstec.letter_view', letter_id=d.id) }}">
+              <strong>{{ d.title }}</strong>
+            </a>
+            {% if not d.number %}<span class="badge badge--warning">без номера</span>{% endif %}
+            {% if d.subject %}<div class="text-xs muted">{{ d.subject }}</div>
+            {% elif d.notes %}<div class="text-xs muted">{{ d.notes }}</div>{% endif %}
+          </td>
+          <td class="text-xs nowrap">
+            {% if d.letter_date %}{{ d.letter_date.strftime('%d.%m.%Y') }}
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="text-xs">
+            {% if st.files %}
+            <span class="badge badge--neutral">{{ st.files }}</span>
+            <span class="muted">{{ 'файл' if st.files == 1 else 'файлов' }}</span>
+            {% else %}<span class="muted">нет</span>{% endif %}
+          </td>
+          <td>
+            <div class="inline">
+              {% if st.domains %}<span class="badge badge--primary">{{ st.domains }} дом.</span>{% endif %}
+              {% if st.ips %}<span class="badge badge--neutral">{{ st.ips }} IP</span>{% endif %}
+              {% if st.urls %}<span class="badge badge--info">{{ st.urls }} URL</span>{% endif %}
+              {% if st.hashes %}<span class="badge badge--neutral">{{ st.hashes }} хеш.</span>{% endif %}
+              {% if not (st.domains or st.ips or st.urls or st.hashes) %}<span class="muted text-xs">нет</span>{% endif %}
+            </div>
+          </td>
+          <td class="muted nowrap text-xs">
+            {{ d.created_at.strftime('%d.%m.%Y %H:%M') }}
+            {% if d.user %}<div>{{ d.user.username }}</div>{% endif %}
+          </td>
+          <td class="num nowrap">
+            <a class="btn btn--sm" href="{{ url_for('fstec.letter_view', letter_id=d.id) }}">Открыть</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="6">
+            <div class="empty">
+              {{ ico.icon('inbox') }}
+              <div class="empty__title">Писем нет</div>
+              <div class="empty__text">Загрузите письма ФСТЭК в формате .docx, .odt или .pdf —
+                можно сразу пачкой, номера писем определятся сами.</div>
+              {% if current_user.is_operator %}
+              <a class="btn btn--primary btn--sm" href="{{ url_for('fstec.upload') }}">{{ ico.icon('upload') }} Загрузить</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

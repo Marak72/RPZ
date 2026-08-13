@@ -7,8 +7,8 @@ from datetime import datetime
 
 import pytest
 
-from app.services import siem_client
-from app.services.siem_client import SiemError
+from app.services.skydns.lib import siem_client
+from app.services.skydns.lib.siem_client import SiemError
 
 TIME_FROM = datetime(2026, 8, 1, 0, 0, 0)
 TIME_TO = datetime(2026, 8, 7, 0, 0, 0)
@@ -761,7 +761,7 @@ def _fields_matched(template: str, domain: str, event: dict) -> list[str]:
 
 
 def test_default_filter_matches_a_full_subdomain():
-    from app.settings_store import DEFAULT_SIEM_FILTER
+    from app.services.skydns.settings import DEFAULT_SIEM_FILTER
 
     matched = _fields_matched(
         DEFAULT_SIEM_FILTER, DNS_EVENT["datafield6"], DNS_EVENT
@@ -772,7 +772,7 @@ def test_default_filter_matches_a_full_subdomain():
 
 
 def test_default_filter_still_matches_a_base_domain():
-    from app.settings_store import DEFAULT_SIEM_FILTER
+    from app.services.skydns.settings import DEFAULT_SIEM_FILTER
 
     assert _fields_matched(DEFAULT_SIEM_FILTER, "footprintdns.com", DNS_EVENT) \
         == ["datafield3"]
@@ -780,7 +780,7 @@ def test_default_filter_still_matches_a_base_domain():
 
 def test_legacy_filter_missed_subdomains():
     """Фиксируем сам дефект, чтобы старый шаблон не вернулся незаметно."""
-    from app.settings_store import LEGACY_SIEM_FILTERS
+    from app.services.skydns.settings import LEGACY_SIEM_FILTERS
 
     assert _fields_matched(
         LEGACY_SIEM_FILTERS[0], DNS_EVENT["datafield6"], DNS_EVENT

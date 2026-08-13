@@ -461,6 +461,10 @@ input[type="file"] {
 select { cursor: pointer; }
 .input--auto { width: auto; }
 
+/* Поле, без которого действие не выполнится (напр. причина решения). */
+.is-invalid { border-color: var(--danger); }
+.is-invalid:focus { box-shadow: 0 0 0 3px var(--danger-soft, rgba(220, 38, 38, .18)); }
+
 .check { display: flex; align-items: flex-start; gap: .5rem; margin-bottom: .625rem; }
 .check input[type="checkbox"] { margin-top: .1875rem; accent-color: var(--primary); cursor: pointer; }
 .check label { font-size: .8125rem; cursor: pointer; }

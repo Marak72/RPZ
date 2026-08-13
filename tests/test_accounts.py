@@ -5,8 +5,8 @@ from cryptography.fernet import Fernet
 from config import Config
 
 from app import create_app
-from app.extensions import db
-from app.models import ROLE_ADMIN, User, UserService
+from app.core.extensions import db
+from app.core.models import ROLE_ADMIN, User, UserService
 from app.portal import SERVICES
 
 

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Добавить вручную{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Добавление индикаторов вручную</h2>
+    <p>Для случаев, когда домен или IP получен не из письма ФСТЭК — например, по итогам расследования.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__body">
+    <form method="post">
+      {{ form.hidden_tag() }}
+      <div class="field">
+        {{ form.values.label(class="label") }}
+        {{ form.values(rows=8, placeholder="evil.com&#10;bad-site.ru&#10;185.10.20.30&#10;hxxp://phish[.]example") }}
+        <div class="help">По одному значению в строке (можно через запятую).
+          Маскировка вида <code>example[.]com</code> и <code>hxxp://</code> распознаётся автоматически.
+          Значения, не похожие на домен или IP, будут отклонены.</div>
+      </div>
+      <div class="field">
+        {{ form.notes.label(class="label") }}
+        {{ form.notes(placeholder="например: по результатам разбора инцидента SOC-1234") }}
+      </div>
+      <button class="btn btn--primary">{{ ico.icon('check') }} Добавить</button>
+      <a class="btn btn--ghost" href="{{ url_for('fstec.candidates') }}">Отмена</a>
+    </form>
+  </div>
+</div>
+
+<div class="note mt-2">
+  {{ ico.icon('info', 'icon icon-sm') }}
+  Добавление сюда <strong>не блокирует</strong> домен на DNS-сервере — записи попадают
+  в список кандидатов. Чтобы заблокировать, перейдите в раздел
+  <a href="{{ url_for('fstec.push_view') }}">Выгрузка</a>.
+</div>
+{% endblock %}

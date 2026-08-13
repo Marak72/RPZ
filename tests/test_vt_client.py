@@ -4,8 +4,8 @@ import urllib.request
 
 import pytest
 
-from app.services import vt_client
-from app.services.vt_client import VtError, VtRateLimit
+from app.core import vt_client
+from app.core.vt_client import VtError, VtRateLimit
 
 
 class FakeResponse:

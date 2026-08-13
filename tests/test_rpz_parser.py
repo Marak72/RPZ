@@ -1,4 +1,4 @@
-from app.services import rpz_parser
+from app.services.fstec.lib import rpz_parser
 
 SAMPLE = """$TTL 60
 @   IN  SOA localhost. root.localhost. (

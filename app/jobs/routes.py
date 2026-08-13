@@ -10,10 +10,10 @@ from datetime import datetime, timedelta
 from flask import Blueprint, jsonify
 from flask_login import current_user, login_required
 
-from ..extensions import db
-from ..models import JOB_ACTIVE_STATUSES, BackgroundJob
-from ..services.jobs import active_job  # noqa: F401  (переэкспорт для сервисов)
-from ..services.jobs import cancel
+from ..core.extensions import db
+from ..core.models import BackgroundJob, JOB_ACTIVE_STATUSES
+from ..core.background import active_job  # noqa: F401  (переэкспорт для сервисов)
+from ..core.background import cancel
 
 jobs_bp = Blueprint("jobs", __name__, url_prefix="/jobs")
 
@@ -31,7 +31,7 @@ def status():
     же, и второй оператор должен понимать, почему кнопка недоступна) и
     свои недавно завершённые, пока их не закрыли.
     """
-    from ..services.jobs import _release_stale
+    from ..core.background import _release_stale
 
     _release_stale()
 

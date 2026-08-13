@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Загрузить письма{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Загрузка писем ФСТЭК</h2>
+    <p>Можно выбрать сразу много файлов — хоть все письма за месяц вместе с приложениями.
+       Система сама прочитает каждый файл, найдёт номер и дату письма, сведёт файлы
+       одного письма в одну карточку и покажет все индикаторы для проверки.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__body">
+    <form method="post" enctype="multipart/form-data">
+      {{ form.hidden_tag() }}
+
+      <div class="field">
+        {{ form.documents.label(class="label") }}
+        {{ form.documents(accept=".docx,.odt,.pdf", multiple=True) }}
+        {% for e in form.documents.errors %}<div class="error-text">{{ e }}</div>{% endfor %}
+        <div class="help">
+          Форматы <code>.docx</code>, <code>.odt</code>, <code>.pdf</code>; суммарно до 32 МБ за раз.
+          Файлы сохраняются целиком — письма можно будет открыть позже.
+          Повторно загруженный файл распознаётся по содержимому и второй копией не заводится.
+        </div>
+      </div>
+
+      <div class="note" style="margin:1rem 0">
+        <strong>Реквизиты заполнять не нужно.</strong> Номер и дата берутся из текста письма
+        (а если там нет — из имени файла). Заполняйте поля ниже, только если хотите
+        <em>принудительно</em> сложить всю пачку в одно письмо с этим номером.
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ form.letter_number.label(class="label") }}
+          {{ form.letter_number(placeholder="240/24/1234") }}
+        </div>
+        <div class="field">
+          {{ form.letter_date.label(class="label") }}
+          {{ form.letter_date() }}
+        </div>
+      </div>
+
+      <div class="field">
+        {{ form.notes.label(class="label") }}
+        {{ form.notes(placeholder="краткое описание") }}
+      </div>
+
+      <button type="submit" class="btn btn--primary">
+        {{ ico.icon('upload') }} Загрузить и распознать
+      </button>
+    </form>
+  </div>
+</div>
+
+<div class="note mt-2">
+  <strong>Как раскладываются файлы по письмам.</strong>
+  Файлы с одинаковым номером — одно письмо. Файлы без номера (обычно это приложения)
+  прилипают к письму пачки, если оно там одно. Если номер уже есть в архиве,
+  файлы добавятся к существующему письму. Всё это видно на предпросмотре
+  и правится до сохранения.
+</div>
+
+<div class="note mt-2">
+  <strong>Что распознаёт парсер.</strong> Индикаторы, приведённые в письме отдельными
+  строками или после слов «к адресу…», в том числе замаскированные:
+  <code>example[.]com</code>, <code>hxxp[:]//…</code>, <code>1[.]2[.]3[.]4</code>.
+  Имена вложений, названия ПО и ссылки на документы ФСТЭК отсеиваются автоматически.
+</div>
+{% endblock %}

@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Заблокировано{% endblock %}
+{% block subheading %}<div class="topbar__sub">Живые данные RPZ-зоны DNS-сервера</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Заблокированные домены</h2>
+    <p>
+      {% if snapshot %}
+        Считано {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC
+        (<span data-since="{{ snapshot.fetched_at.timestamp()|int }}"></span>){% if snapshot.user %},
+        {{ snapshot.user.username }}{% endif %} ·
+        {{ snapshot.entry_count }} записей в файле
+      {% else %}
+        Файл зоны ещё не считывался с сервера
+      {% endif %}
+    </p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('fstec.rpz_csv') }}">{{ ico.icon('download') }} Экспорт CSV</a>
+    <a class="btn" href="{{ url_for('fstec.rpz_history') }}">{{ ico.icon('clock') }} История</a>
+    <a class="btn" href="{{ url_for('fstec.push_view') }}">{{ ico.icon('upload') }} Выгрузка</a>
+    {% if current_user.is_operator %}
+    <form method="post" action="{{ url_for('fstec.rpz_refresh') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--primary">{{ ico.icon('refresh') }} Обновить с сервера</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if not snapshot %}
+<div class="card">
+  <div class="empty">
+    {{ ico.icon('lock') }}
+    <div class="empty__title">Зона ещё не считывалась</div>
+    <div class="empty__text">
+      {% if current_user.is_operator %}
+        Нажмите «Обновить с сервера» — приложение подключится по SSH, прочитает файл зоны и отключится.
+      {% else %}
+        Данные появятся после того, как оператор считает зону с сервера.
+      {% endif %}
+    </div>
+    {% if current_user.is_operator and not server %}
+    <a class="btn btn--primary btn--sm" href="{{ url_for('fstec.settings') }}">{{ ico.icon('settings') }} Настроить подключение</a>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по домену" data-search-focus>
+      </div>
+      <select name="action" class="input--auto" onchange="this.form.submit()">
+        <option value="">Все действия</option>
+        <option value="block" {% if action == 'block' %}selected{% endif %}>Блокировка</option>
+        <option value="redirect" {% if action == 'redirect' %}selected{% endif %}>Перенаправление</option>
+      </select>
+      <button class="btn btn--sm">Применить</button>
+      {% if q or action %}<a class="btn btn--ghost btn--sm" href="{{ url_for('fstec.rpz_view') }}">Сбросить</a>{% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <span class="text-xs muted">Показано: {{ rows|length }} из {{ blocked_total }}</span>
+    <button type="button" class="btn btn--sm" data-copy-column="rpzTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+    </button>
+  </div>
+
+  <div class="table-wrap table-wrap--tall">
+    <table class="table" id="rpzTable">
+      <thead>
+        <tr><th>Домен</th><th>Тип</th><th>Действие</th><th>Цель</th><th>Wildcard</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td class="value" data-value="{{ r.domain }}">
+            {{ r.domain }}
+            <button type="button" class="copy-btn" data-copy="{{ r.domain }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td><span class="badge badge--neutral">{{ r.record_type }}</span></td>
+          <td>
+            {% if r.action == 'block' %}<span class="badge badge--danger">блокировка</span>
+            {% else %}<span class="badge badge--warning">перенаправление</span>{% endif %}
+          </td>
+          <td class="mono muted">{{ r.target }}</td>
+          <td>{% if r.has_wildcard %}<span class="badge badge--info">*.домен</span>{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="5">
+            <div class="empty">
+              {{ ico.icon('search') }}
+              <div class="empty__title">Ничего не найдено</div>
+              <div class="empty__text">Измените условия фильтра.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

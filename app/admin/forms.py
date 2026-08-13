@@ -10,7 +10,7 @@ from wtforms import (
 )
 from wtforms.validators import DataRequired, EqualTo, Length, Optional, Regexp
 
-from ..models import ROLES
+from ..core.models import ROLES
 
 # Простая проверка адреса: полноценный валидатор WTForms тянет отдельный пакет,
 # а приложение должно ставиться в изолированной сети без доступа к PyPI.

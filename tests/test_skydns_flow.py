@@ -11,19 +11,18 @@ from cryptography.fernet import Fernet
 from config import Config  # noqa: E402
 
 from app import create_app  # noqa: E402
-from app.extensions import db  # noqa: E402
-from app.models import (  # noqa: E402
-    BlockEntry,
+from app.core.extensions import db  # noqa: E402
+from app.core.models import User, UserService  # noqa: E402
+from app.services.fstec.models import BlockEntry  # noqa: E402
+from app.services.skydns.models import (
     SiemQueryLog,
     SkydnsCategory,
     ThreatDomain,
     ThreatHost,
-    User,
-    UserService,
 )
 from app.portal import SERVICES  # noqa: E402
-from app.services.siem_client import HostHit, SearchResult, SiemError  # noqa: E402
-from app.skydns import routes as skydns_routes  # noqa: E402
+from app.services.skydns.lib.siem_client import HostHit, SearchResult, SiemError  # noqa: E402
+from app.services.skydns import routes as skydns_routes  # noqa: E402
 
 
 class FakeSiemClient:
@@ -149,7 +148,7 @@ def test_csv_import_saves_domains(client):
 
 def test_api_sync_keeps_only_tracked_categories(client, monkeypatch):
     """Домен вне отслеживаемых категорий в разбор не попадает."""
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     class FakeSkydns:
         def __init__(self, config):
@@ -189,7 +188,7 @@ def test_api_sync_keeps_only_tracked_categories(client, monkeypatch):
 
 def test_api_sync_saves_devices_as_hosts(client, monkeypatch):
     """Устройства с агентом SkyDNS становятся хостами без обращения к SIEM."""
-    from app.services.skydns_client import Category, DeviceStat, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DeviceStat, DomainStat
 
     class FakeSkydns:
         def __init__(self, config):
@@ -390,7 +389,7 @@ def test_manager_cannot_run_lookup(app):
 # --- категории угроз и лимит выборки --------------------------------------
 
 def _fake_skydns(monkeypatch, cats, domains, hosts=None):
-    from app.services.skydns_client import Category, DomainStat  # noqa: F401
+    from app.services.skydns.lib.skydns_client import Category, DomainStat  # noqa: F401
 
     class FakeSkydns:
         def __init__(self, config):
@@ -418,7 +417,7 @@ def _sync(client):
 
 def test_category_counters_are_saved(client, monkeypatch):
     """Счётчики по категориям нужны, чтобы видеть, откуда идёт поток."""
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _fake_skydns(
         monkeypatch,
@@ -437,7 +436,7 @@ def test_category_counters_are_saved(client, monkeypatch):
 
 
 def test_dashboard_shows_threat_categories(client, monkeypatch):
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _fake_skydns(
         monkeypatch,
@@ -454,8 +453,8 @@ def test_dashboard_shows_threat_categories(client, monkeypatch):
 
 def test_hitting_the_limit_is_reported(client, monkeypatch):
     """Упор в лимит нельзя проглатывать: часть доменов осталась в SkyDNS."""
-    from app.models import BackgroundJob
-    from app.services.skydns_client import Category, DomainStat
+    from app.core.models import BackgroundJob
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     fake = _fake_skydns(
         monkeypatch,
@@ -469,7 +468,7 @@ def test_hitting_the_limit_is_reported(client, monkeypatch):
 
 
 def test_no_limit_warning_when_everything_fits(client, monkeypatch):
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _fake_skydns(monkeypatch, [Category(3, "Malware", True)],
                  [DomainStat("evil.ru", requests=1, cat_ids=[3])])
@@ -478,7 +477,7 @@ def test_no_limit_warning_when_everything_fits(client, monkeypatch):
 
 def test_category_filter_matches_every_category_of_a_domain(client, monkeypatch):
     """Домен часто относится к нескольким категориям — искать надо по всем."""
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _fake_skydns(
         monkeypatch,
@@ -495,7 +494,7 @@ def test_category_filter_matches_every_category_of_a_domain(client, monkeypatch)
 
 
 def test_category_filter_shows_titles_not_ids(client, monkeypatch):
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _fake_skydns(monkeypatch, [Category(3, "Malware", True)],
                  [DomainStat("evil.ru", requests=1, cat_ids=[3])])
@@ -510,7 +509,7 @@ def test_category_filter_shows_titles_not_ids(client, monkeypatch):
 
 def test_lookup_returns_immediately_and_creates_a_job(client):
     """Страница не должна ждать SIEM: работа уходит в фоновое задание."""
-    from app.models import JOB_KIND_SIEM, BackgroundJob
+    from app.core.models import BackgroundJob, JOB_KIND_SIEM
 
     threat_id = _add_threat()
     response = client.post(f"/skydns/domains/{threat_id}/lookup")
@@ -524,7 +523,7 @@ def test_lookup_returns_immediately_and_creates_a_job(client):
 
 
 def test_job_summary_counts_domains_and_hosts(client):
-    from app.models import BackgroundJob
+    from app.core.models import BackgroundJob
 
     _add_threat("a-evil.ru")
     _add_threat("b-evil.ru")
@@ -539,7 +538,7 @@ def test_second_lookup_is_refused_while_the_first_runs(client):
     """Два поиска разом только поделят между собой и без того небыстрый SIEM."""
     from datetime import datetime
 
-    from app.models import JOB_KIND_SIEM, JOB_RUNNING, BackgroundJob
+    from app.core.models import BackgroundJob, JOB_KIND_SIEM, JOB_RUNNING
 
     db.session.add(BackgroundJob(
         kind=JOB_KIND_SIEM, status=JOB_RUNNING, title="идёт",
@@ -557,7 +556,7 @@ def test_second_lookup_is_refused_while_the_first_runs(client):
 
 def test_empty_result_points_to_the_probe_page(client):
     """Ноль хостов чаще означает не «никто не ходил», а промах по полю."""
-    from app.models import BackgroundJob
+    from app.core.models import BackgroundJob
 
     FakeSiemClient.hits = ()
     _add_threat()
@@ -567,7 +566,7 @@ def test_empty_result_points_to_the_probe_page(client):
 
 
 def test_login_failure_marks_the_job_as_failed(client):
-    from app.models import JOB_FAILED, BackgroundJob
+    from app.core.models import BackgroundJob, JOB_FAILED
 
     FakeSiemClient.login_error = "SIEM отклонил вход (401)."
     _add_threat()
@@ -595,7 +594,7 @@ def test_rule_removes_already_loaded_domains(client):
     _exclude(client, "*.footprintdns.com", "телеметрия")
 
     assert {t.domain for t in ThreatDomain.query.all()} == {"evil.ru"}
-    from app.models import DomainExclusion
+    from app.services.skydns.models import DomainExclusion
     assert DomainExclusion.query.one().removed_count == 2
 
 
@@ -607,8 +606,9 @@ def test_rule_respects_the_label_boundary(client):
 
 def test_rule_keeps_new_domains_out_of_the_next_sync(client, monkeypatch):
     """И вперёд: иначе отсеянное возвращалось бы каждой выгрузкой."""
-    from app.models import BackgroundJob, DomainExclusion
-    from app.services.skydns_client import Category, DomainStat
+    from app.core.models import BackgroundJob
+    from app.services.skydns.models import DomainExclusion
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _exclude(client, "*.footprintdns.com")
     _fake_skydns(
@@ -628,13 +628,13 @@ def test_rule_keeps_new_domains_out_of_the_next_sync(client, monkeypatch):
 def test_duplicate_rule_is_not_created_twice(client):
     _exclude(client, "*.example.com")
     _exclude(client, "*.Example.com.")
-    from app.models import DomainExclusion
+    from app.services.skydns.models import DomainExclusion
     assert DomainExclusion.query.count() == 1
 
 
 def test_removing_a_rule_lets_domains_come_back(client, monkeypatch):
-    from app.models import DomainExclusion
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.models import DomainExclusion
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _exclude(client, "*.footprintdns.com")
     rule_id = DomainExclusion.query.one().id
@@ -659,7 +659,7 @@ def test_exclude_from_the_threat_card_covers_the_whole_service(client):
     client.post(f"/skydns/domains/{threat_id}/exclude", data={"scope": "root"},
                 follow_redirects=True)
 
-    from app.models import DomainExclusion
+    from app.services.skydns.models import DomainExclusion
     assert DomainExclusion.query.one().pattern == "*.footprintdns.com"
     assert [t.id for t in ThreatDomain.query.all()] == [kept]
 
@@ -667,7 +667,7 @@ def test_exclude_from_the_threat_card_covers_the_whole_service(client):
 # --- свёртка до корневых --------------------------------------------------
 
 def test_root_domain_is_filled_on_insert(client, monkeypatch):
-    from app.services.skydns_client import Category, DomainStat
+    from app.services.skydns.lib.skydns_client import Category, DomainStat
 
     _fake_skydns(
         monkeypatch,
@@ -685,7 +685,7 @@ def test_roots_page_groups_names_of_one_service(client):
     _add_threat("b.footprintdns.com")
     _add_threat("evil.ru")
     for threat in ThreatDomain.query.all():
-        from app.services.domains import registrable
+        from app.services.skydns.lib.domains import registrable
         threat.root_domain = registrable(threat.domain)
     db.session.commit()
 
@@ -696,7 +696,7 @@ def test_roots_page_groups_names_of_one_service(client):
 
 
 def test_domains_can_be_filtered_by_root(client):
-    from app.services.domains import registrable
+    from app.services.skydns.lib.domains import registrable
 
     _add_threat("a.footprintdns.com")
     _add_threat("evil.ru")
@@ -712,7 +712,7 @@ def test_domains_can_be_filtered_by_root(client):
 # --- хосты по категориям --------------------------------------------------
 
 def test_category_page_shows_who_went_where(client):
-    from app.models import SkydnsCategory
+    from app.services.skydns.models import SkydnsCategory
 
     db.session.add(SkydnsCategory(id=4, title="Phishing", is_dangerous=True))
     threat = ThreatDomain(domain="phish.ru", cat_ids="4", root_domain="phish.ru")
@@ -731,7 +731,7 @@ def test_category_page_shows_who_went_where(client):
 
 def test_category_match_does_not_bleed_between_ids(client):
     """cat_ids хранится строкой: поиск «1» не должен ловить 12 и 71."""
-    from app.models import SkydnsCategory
+    from app.services.skydns.models import SkydnsCategory
 
     db.session.add(SkydnsCategory(id=1, title="Новые домены", is_dangerous=True))
     threat = ThreatDomain(domain="bot.ru", cat_ids="12,71", root_domain="bot.ru")
@@ -759,7 +759,7 @@ def test_batch_delete_removes_selected_domains(client):
 
 def _fake_vt(monkeypatch, malicious=7, rate_limit_after=None):
     """Подставной VirusTotal: считает вызовы, умеет упереться в лимит."""
-    from app.services import vt_client, vt_store
+    from app.core import vt_client, vt_store
 
     calls = []
 
@@ -777,7 +777,7 @@ def _fake_vt(monkeypatch, malicious=7, rate_limit_after=None):
 
 
 def test_vt_check_from_the_threat_card(client, monkeypatch):
-    from app.models import VtReport
+    from app.core.models import VtReport
 
     calls = _fake_vt(monkeypatch)
     threat_id = _add_threat("evil.ru")
@@ -810,8 +810,8 @@ def test_vt_batch_stops_on_the_rate_limit(client, monkeypatch):
 
 
 def test_vt_failure_is_recorded_not_lost(client, monkeypatch):
-    from app.models import VtReport
-    from app.services import vt_client, vt_store
+    from app.core.models import VtReport
+    from app.core import vt_client, vt_store
 
     def boom(value, api_key, timeout=20):
         raise vt_client.VtError("Ключ VirusTotal не задан.")
@@ -827,7 +827,7 @@ def test_vt_failure_is_recorded_not_lost(client, monkeypatch):
 
 def test_domains_go_to_siem_in_batches(client):
     """Не по одному запросу на домен: на длинном списке это часы."""
-    from app.settings_store import KEY_SIEM_CHUNK, set_setting
+    from app.services.skydns.settings import KEY_SIEM_CHUNK, set_setting
 
     set_setting(KEY_SIEM_CHUNK, "3")
     db.session.commit()
@@ -842,7 +842,7 @@ def test_domains_go_to_siem_in_batches(client):
 
 
 def test_chunk_of_one_keeps_the_old_behaviour(client):
-    from app.settings_store import KEY_SIEM_CHUNK, set_setting
+    from app.services.skydns.settings import KEY_SIEM_CHUNK, set_setting
 
     set_setting(KEY_SIEM_CHUNK, "1")
     db.session.commit()
@@ -892,7 +892,7 @@ def test_no_cap_on_the_number_of_domains(client):
 
 def test_legacy_filter_is_replaced_by_the_current_one(client):
     """Старое умолчание не находило поддомены — оператор его не выбирал."""
-    from app.settings_store import (
+    from app.services.skydns.settings import (
         DEFAULT_SIEM_FILTER,
         KEY_SIEM_FILTER,
         LEGACY_SIEM_FILTERS,
@@ -907,7 +907,7 @@ def test_legacy_filter_is_replaced_by_the_current_one(client):
 
 def test_own_filter_is_left_alone(client):
     """Свой шаблон оператора трогать нельзя."""
-    from app.settings_store import (
+    from app.services.skydns.settings import (
         KEY_SIEM_FILTER,
         get_siem_filter_template,
         set_setting,
@@ -921,7 +921,7 @@ def test_own_filter_is_left_alone(client):
 
 def test_settings_page_shows_the_effective_filter(client):
     """В форме должен стоять тот шаблон, который реально уходит в SIEM."""
-    from app.settings_store import KEY_SIEM_FILTER, LEGACY_SIEM_FILTERS, set_setting
+    from app.services.skydns.settings import KEY_SIEM_FILTER, LEGACY_SIEM_FILTERS, set_setting
 
     set_setting(KEY_SIEM_FILTER, LEGACY_SIEM_FILTERS[0])
     db.session.commit()
@@ -933,7 +933,7 @@ def test_settings_page_shows_the_effective_filter(client):
 
 def test_failed_batch_is_retried_domain_by_domain(client, monkeypatch):
     """Отказ по пачке ничего не говорит о конкретном домене."""
-    from app.models import BackgroundJob
+    from app.core.models import BackgroundJob
 
     original = FakeSiemClient.search_many
 
@@ -985,7 +985,7 @@ def test_cancelled_job_frees_the_next_run(client):
     """После перезапуска службы запись остаётся «выполняется»."""
     from datetime import datetime
 
-    from app.models import JOB_KIND_SIEM, JOB_RUNNING, BackgroundJob
+    from app.core.models import BackgroundJob, JOB_KIND_SIEM, JOB_RUNNING
 
     stuck = BackgroundJob(
         kind=JOB_KIND_SIEM, status=JOB_RUNNING, title="осталось от перезапуска",
@@ -1009,8 +1009,8 @@ def test_cancelled_job_frees_the_next_run(client):
 
 def test_worker_stops_when_the_job_is_cancelled(app):
     """Снятое задание не должно дописывать результаты задним числом."""
-    from app.models import JOB_KIND_SIEM, BackgroundJob
-    from app.services import jobs
+    from app.core.models import BackgroundJob, JOB_KIND_SIEM
+    from app.core import background as jobs
 
     steps = []
 

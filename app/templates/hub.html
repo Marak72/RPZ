@@ -43,7 +43,7 @@
       </p>
 
       <div class="grid grid--stats mt-2">
-        <a class="stat stat--primary" href="{{ url_for('main.rpz_view') }}">
+        <a class="stat stat--primary" href="{{ url_for('fstec.rpz_view') }}">
           <div class="stat__top">
             <span class="stat__icon">{{ ico.icon('lock') }}</span>
             <span class="stat__label">Заблокировано</span>
@@ -52,7 +52,7 @@
           <div class="stat__hint">записей в зоне</div>
         </a>
         <a class="stat {{ 'stat--warning' if fstec.pending else 'stat--success' }}"
-           href="{{ url_for('main.push_view') }}">
+           href="{{ url_for('fstec.push_view') }}">
           <div class="stat__top">
             <span class="stat__icon">{{ ico.icon('upload') }}</span>
             <span class="stat__label">Ждут выгрузки</span>
@@ -60,7 +60,7 @@
           <div class="stat__value">{{ fstec.pending }}</div>
           <div class="stat__hint">новых доменов</div>
         </a>
-        <a class="stat stat--info" href="{{ url_for('main.documents') }}">
+        <a class="stat stat--info" href="{{ url_for('fstec.documents') }}">
           <div class="stat__top">
             <span class="stat__icon">{{ ico.icon('inbox') }}</span>
             <span class="stat__label">Письма</span>
@@ -74,7 +74,7 @@
       </div>
     </div>
     <div class="card__footer">
-      <a class="btn btn--primary" href="{{ url_for('main.dashboard') }}">
+      <a class="btn btn--primary" href="{{ url_for('fstec.dashboard') }}">
         {{ ico.icon('grid') }} Открыть сервис
       </a>
     </div>

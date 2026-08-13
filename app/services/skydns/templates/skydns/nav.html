@@ -1,0 +1,59 @@
+{# Боковая навигация сервиса «Угрозы SkyDNS». #}
+<div class="nav-group">
+  <a class="nav-link {% if ep == 'skydns.dashboard' %}is-active{% endif %}" href="{{ url_for('skydns.dashboard') }}">
+    {{ ico.icon('grid') }} Дашборд
+  </a>
+</div>
+
+<div class="nav-group">
+  <div class="nav-group__title">Разбор</div>
+  <a class="nav-link {% if ep in ('skydns.domains', 'skydns.threat_view') %}is-active{% endif %}"
+     href="{{ url_for('skydns.domains') }}">
+    {{ ico.icon('globe') }} Опасные домены
+    <span class="nav-link__count">{{ skydns_counts.threats }}</span>
+  </a>
+  {# Свёрнутый список: одна строка на сервис вместо сотни его поддоменов. #}
+  <a class="nav-link {% if ep == 'skydns.roots' %}is-active{% endif %}"
+     href="{{ url_for('skydns.roots') }}">
+    {{ ico.icon('list') }} По корневым доменам
+  </a>
+  <a class="nav-link {% if ep in ('skydns.hosts', 'skydns.host_view') %}is-active{% endif %}"
+     href="{{ url_for('skydns.hosts') }}">
+    {{ ico.icon('server') }} Конечные хосты
+    <span class="nav-link__count">{{ skydns_counts.hosts }}</span>
+  </a>
+  <a class="nav-link {% if ep in ('skydns.by_category', 'skydns.category_hosts') %}is-active{% endif %}"
+     href="{{ url_for('skydns.by_category') }}">
+    {{ ico.icon('hash') }} Хосты по категориям
+  </a>
+  <a class="nav-link {% if ep == 'skydns.categories' %}is-active{% endif %}"
+     href="{{ url_for('skydns.categories') }}">
+    {{ ico.icon('settings') }} Справочник категорий
+  </a>
+  <a class="nav-link {% if ep == 'skydns.logs' %}is-active{% endif %}" href="{{ url_for('skydns.logs') }}">
+    {{ ico.icon('list') }} Журнал запросов
+  </a>
+</div>
+
+<div class="nav-group">
+  <div class="nav-group__title">Действия</div>
+  {% if current_user.is_operator %}
+  <a class="nav-link {% if ep == 'skydns.sync' %}is-active{% endif %}" href="{{ url_for('skydns.sync') }}">
+    {{ ico.icon('download') }} Загрузить статистику
+  </a>
+  <a class="nav-link {% if ep == 'skydns.exclusions' %}is-active{% endif %}"
+     href="{{ url_for('skydns.exclusions') }}">
+    {{ ico.icon('lock') }} Исключения
+  </a>
+  <a class="nav-link {% if ep == 'skydns.settings' %}is-active{% endif %}"
+     href="{{ url_for('skydns.settings') }}">
+    {{ ico.icon('settings') }} Настройки сервиса
+  </a>
+  {% endif %}
+  <a class="nav-link" href="{{ url_for('fstec.push_view') }}">
+    {{ ico.icon('lock') }} К выгрузке в RPZ
+    {% if skydns_counts.blocked %}
+    <span class="nav-link__count">{{ skydns_counts.blocked }}</span>
+    {% endif %}
+  </a>
+</div>

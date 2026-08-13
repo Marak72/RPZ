@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}URL с путями{% endblock %}
+{% block subheading %}<div class="topbar__sub">Индикаторы для прокси и WAF</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Ссылки с путями</h2>
+    <p>RPZ работает на уровне DNS-имён и не блокирует конкретные пути — эти индикаторы вынесены отдельно.</p>
+  </div>
+  <a class="btn" href="{{ url_for('fstec.urls_csv') }}">{{ ico.icon('download') }} Экспорт CSV</a>
+</div>
+
+<div class="note" style="margin-bottom:1rem">
+  {{ ico.icon('info', 'icon icon-sm') }}
+  Хост каждой ссылки сохранён в разделе
+  <a href="{{ url_for('fstec.candidates', type='domain') }}">Домены</a> и может быть выгружен в RPZ.
+  Сами пути блокируются на прокси/WAF.
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по ссылке" data-search-focus>
+      </div>
+      <button class="btn btn--sm">Найти</button>
+      {% if q %}<a class="btn btn--ghost btn--sm" href="{{ url_for('fstec.urls') }}">Сбросить</a>{% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="urlTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+    </button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table" id="urlTable">
+      <thead>
+        <tr><th>URL</th><th>Хост</th><th>Источник</th><th>Добавлен</th></tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td class="value url-cell" data-value="{{ it.value }}">
+            {{ it.value }}
+            <button type="button" class="copy-btn" data-copy="{{ it.value }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td class="mono">{{ it.host }}</td>
+          <td class="muted text-xs">{{ it.document.filename if it.document else '—' }}</td>
+          <td class="muted nowrap text-xs">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="4">
+            <div class="empty">
+              {{ ico.icon('link') }}
+              <div class="empty__title">Ссылок с путями нет</div>
+              <div class="empty__text">Они появятся после загрузки письма, где есть ссылки вида
+                <code>hxxp://example[.]com/path</code>.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

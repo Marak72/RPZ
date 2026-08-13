@@ -8,8 +8,8 @@ from datetime import date
 
 import pytest
 
-from app.services import skydns_client
-from app.services.skydns_client import (
+from app.services.skydns.lib import skydns_client
+from app.services.skydns.lib.skydns_client import (
     Category,
     SkydnsClient,
     SkydnsConfig,

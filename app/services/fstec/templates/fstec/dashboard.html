@@ -1,0 +1,219 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Дашборд{% endblock %}
+{% block subheading %}<div class="topbar__sub">Состояние блокировок ФСТЭК</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Обзор</h2>
+    <p>
+      {% if snapshot %}
+        Данные RPZ-зоны от {{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC
+        (<span data-since="{{ snapshot.fetched_at.timestamp()|int }}"></span>)
+      {% else %}
+        RPZ-зона ещё не считывалась с сервера
+      {% endif %}
+    </p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('fstec.rpz_csv') }}">{{ ico.icon('download') }} Экспорт CSV</a>
+    {% if current_user.is_operator %}
+    <form method="post" action="{{ url_for('fstec.rpz_refresh') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--primary">{{ ico.icon('refresh') }} Обновить с сервера</button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if stats.pending %}
+<div class="alert alert--warning">
+  {{ ico.icon('alert') }}
+  <div class="alert__text"><strong>{{ stats.pending }}</strong>
+    {{ 'домен ещё не заблокирован' if stats.pending == 1 else 'доменов ещё не заблокированы' }} в RPZ-зоне.</div>
+  <a class="btn btn--sm" href="{{ url_for('fstec.push_view') }}">Перейти к выгрузке</a>
+</div>
+{% endif %}
+
+<div class="grid grid--stats" style="margin-bottom:1rem">
+  <a class="stat stat--primary" href="{{ url_for('fstec.rpz_view') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('lock') }}</span>
+      <span class="stat__label">Заблокировано</span>
+    </div>
+    <div class="stat__value">{{ stats.rpz_domains }}</div>
+    <div class="stat__hint">{{ stats.rpz_records }} записей в файле зоны</div>
+  </a>
+
+  <a class="stat {{ 'stat--warning' if stats.pending else 'stat--success' }}" href="{{ url_for('fstec.push_view') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('upload') }}</span>
+      <span class="stat__label">Ожидают выгрузки</span>
+    </div>
+    <div class="stat__value">{{ stats.pending }}</div>
+    <div class="stat__hint">выгружено нами: {{ stats.pushed }}</div>
+  </a>
+
+  <a class="stat stat--info" href="{{ url_for('fstec.candidates', type='domain') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('globe') }}</span>
+      <span class="stat__label">Домены</span>
+    </div>
+    <div class="stat__value">{{ stats.domains }}</div>
+    <div class="stat__hint">из писем ФСТЭК</div>
+  </a>
+
+  <a class="stat" href="{{ url_for('fstec.candidates', type='ip') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('server') }}</span>
+      <span class="stat__label">IP-адреса</span>
+    </div>
+    <div class="stat__value">{{ stats.ips }}</div>
+    <div class="stat__hint">блокируются на МЭ</div>
+  </a>
+
+  <a class="stat" href="{{ url_for('fstec.urls') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('link') }}</span>
+      <span class="stat__label">URL с путями</span>
+    </div>
+    <div class="stat__value">{{ stats.urls }}</div>
+    <div class="stat__hint">для прокси/WAF</div>
+  </a>
+
+  <a class="stat" href="{{ url_for('fstec.iocs') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('hash') }}</span>
+      <span class="stat__label">Хеши (IoC)</span>
+    </div>
+    <div class="stat__value">{{ stats.hashes }}</div>
+    <div class="stat__hint">для SIEM</div>
+  </a>
+
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('activity') }}
+      <span class="card__title">Состояние RPZ-зоны</span>
+      <div style="margin-left:auto">
+        {% if snapshot %}<span class="badge badge--success"><i class="dot dot--ok"></i> считана</span>
+        {% else %}<span class="badge badge--warning"><i class="dot dot--warn"></i> нет данных</span>{% endif %}
+      </div>
+    </div>
+    <div class="card__body">
+      {% if snapshot %}
+      <dl class="kv">
+        <dt>Считана</dt><dd>{{ snapshot.fetched_at.strftime('%d.%m.%Y %H:%M') }} UTC</dd>
+        <dt>Оператор</dt><dd>{{ snapshot.user.username if snapshot.user else '—' }}</dd>
+        <dt>Сервер</dt><dd class="mono">{{ snapshot.server.host if snapshot.server else '—' }}</dd>
+        <dt>Файл</dt><dd class="mono">{{ snapshot.server.zone_file_path if snapshot.server else '—' }}</dd>
+        <dt>Записей</dt><dd>{{ snapshot.entry_count }} ({{ stats.rpz_domains }} доменов)</dd>
+      </dl>
+      <div class="btn-group mt-2">
+        <a class="btn btn--sm" href="{{ url_for('fstec.rpz_view') }}">{{ ico.icon('list') }} Список доменов</a>
+        <a class="btn btn--sm" href="{{ url_for('fstec.rpz_history') }}">{{ ico.icon('clock') }} История чтений</a>
+      </div>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('lock') }}
+        <div class="empty__title">Зона ещё не считывалась</div>
+        <div class="empty__text">
+          {% if current_user.is_operator %}
+            Настройте учётную запись SSH и нажмите «Обновить с сервера».
+          {% else %}
+            Данные появятся после первого чтения зоны оператором.
+          {% endif %}
+        </div>
+        {% if current_user.is_operator %}
+        <a class="btn btn--primary btn--sm" href="{{ url_for('fstec.settings') }}">{{ ico.icon('settings') }} Настройки</a>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('inbox') }}<span class="card__title">Последние письма</span>
+      <span class="badge badge--neutral" style="margin-left:auto">всего: {{ stats.documents }}</span>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if recent_docs %}
+      <table class="table">
+        <tbody>
+          {% for d in recent_docs %}
+          <tr>
+            <td>
+              <div><a href="{{ url_for('fstec.letter_view', letter_id=d.id) }}">{{ d.title }}</a></div>
+              <div class="text-xs muted">
+                {%- if d.letter_date %}от {{ d.letter_date.strftime('%d.%m.%Y') }} · {% endif -%}
+                загружено {{ d.created_at.strftime('%d.%m.%Y %H:%M') }}
+                {%- if d.notes %} · {{ d.notes }}{% endif %}
+              </div>
+            </td>
+            <td class="num nowrap">
+              <span class="badge badge--neutral">{{ d.files|length }} файл.</span>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('inbox') }}
+        <div class="empty__title">Писем пока нет</div>
+        {% if current_user.is_operator %}
+        <div class="empty__text">Загрузите первое письмо ФСТЭК в формате .docx или .odt.</div>
+        <a class="btn btn--primary btn--sm" href="{{ url_for('fstec.upload') }}">{{ ico.icon('upload') }} Загрузить письмо</a>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('upload') }}<span class="card__title">Последние выгрузки</span>
+      <a class="btn btn--ghost btn--sm" style="margin-left:auto" href="{{ url_for('fstec.push_history') }}">Весь журнал</a>
+    </div>
+    <div class="card__body card__body--flush">
+      {% if recent_pushes %}
+      <table class="table">
+        <tbody>
+          {% for p in recent_pushes %}
+          <tr>
+            <td>
+              <div class="inline">
+                {% if p.status == 'success' %}<span class="badge badge--success">успешно</span>
+                {% elif p.status == 'dry_run' %}<span class="badge badge--info">предпросмотр</span>
+                {% elif p.status == 'rolled_back' %}<span class="badge badge--warning">откат</span>
+                {% else %}<span class="badge badge--danger">ошибка</span>{% endif %}
+                <span class="nowrap">{{ p.entries_count }} доменов</span>
+              </div>
+              <div class="text-xs muted">
+                {{ p.started_at.strftime('%d.%m.%Y %H:%M') }} · {{ p.user.username if p.user else '—' }}
+              </div>
+            </td>
+            <td class="num nowrap">
+              <a class="btn btn--ghost btn--sm" href="{{ url_for('fstec.push_log_view', log_id=p.id) }}"
+                 title="Открыть журнал">{{ ico.icon('eye', 'icon icon-sm') }}</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('upload') }}
+        <div class="empty__title">Выгрузок ещё не было</div>
+        <div class="empty__text">Домены из писем можно выгрузить в RPZ-зону на DNS-сервере.</div>
+        <a class="btn btn--sm" href="{{ url_for('fstec.push_view') }}">Перейти к выгрузке</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

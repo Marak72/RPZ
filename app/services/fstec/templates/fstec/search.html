@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Поиск индикатора{% endblock %}
+{% block subheading %}<div class="topbar__sub">Есть ли этот адрес у нас и откуда он</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Поиск по всем индикаторам</h2>
+    <p>Ищет сразу везде: домены и IP, ссылки с путями, хеши и сама RPZ-зона на
+       DNS-сервере. Достаточно части значения.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__body">
+    <form method="get" class="inline">
+      <div class="search" style="flex:1">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" autofocus
+               placeholder="example.com, 203.0.113.10, часть хеша…" data-search-focus>
+      </div>
+      <button class="btn btn--primary">Найти</button>
+    </form>
+  </div>
+</div>
+
+{% if q %}
+<p class="text-sm muted mt-2">По запросу «{{ q }}» найдено: <strong>{{ total }}</strong>.</p>
+
+{% if result.entries %}
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('globe') }}<span class="card__title">Домены и IP-адреса</span>
+    <span class="badge badge--neutral" style="margin-left:auto">{{ result.entries|length }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Значение</th><th>Тип</th><th>Статус</th><th>Письма</th></tr></thead>
+      <tbody>
+        {% for it in result.entries %}
+        <tr>
+          <td class="value"><a href="{{ url_for('fstec.object_view', entry_id=it.id) }}">{{ it.value }}</a></td>
+          <td>{% if it.entry_type == 'ip' %}<span class="badge badge--neutral">IP</span>
+              {% else %}<span class="badge badge--primary">домен</span>{% endif %}</td>
+          <td><span class="badge badge--neutral">{{ it.status_title }}</span></td>
+          <td class="text-xs muted">
+            {% for letter in it.letters %}
+            <a href="{{ url_for('fstec.letter_view', letter_id=letter.id) }}">{{ letter.number or '#' ~ letter.id }}</a>{% if not loop.last %}, {% endif %}
+            {% else %}—{% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if result.urls %}
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('link') }}<span class="card__title">Ссылки с путями</span>
+    <span class="badge badge--neutral" style="margin-left:auto">{{ result.urls|length }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>URL</th><th>Хост</th><th>Письма</th></tr></thead>
+      <tbody>
+        {% for it in result.urls %}
+        <tr>
+          <td class="value url-cell">{{ it.value }}</td>
+          <td class="mono muted">{{ it.host }}</td>
+          <td class="text-xs muted">{{ it.letter_numbers or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if result.hashes %}
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('hash') }}<span class="card__title">Хеши</span>
+    <span class="badge badge--neutral" style="margin-left:auto">{{ result.hashes|length }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Хеш</th><th>Тип</th><th>Письма</th></tr></thead>
+      <tbody>
+        {% for it in result.hashes %}
+        <tr>
+          <td class="value mono">{{ it.value }}</td>
+          <td><span class="badge badge--info">{{ it.hash_type }}</span></td>
+          <td class="text-xs muted">{{ it.letter_numbers or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if result.zone %}
+<div class="card mt-2">
+  <div class="card__header">{{ ico.icon('lock') }}<span class="card__title">В RPZ-зоне на сервере</span>
+    <span class="badge badge--neutral" style="margin-left:auto">{{ result.zone|length }}</span>
+  </div>
+  <div class="card__body">
+    <p class="text-sm muted">Эти домены есть в зоне по последнему снимку — даже если
+      в базе портала их нет.</p>
+    <div class="inline" style="flex-wrap:wrap;gap:.35rem">
+      {% for domain in result.zone %}
+      <span class="badge badge--neutral mono">{{ domain }}</span>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if total == 0 %}
+<div class="card mt-2">
+  <div class="card__body">
+    <div class="empty">
+      {{ ico.icon('search') }}
+      <div class="empty__title">Ничего не найдено</div>
+      <div class="empty__text">Этого значения нет ни в индикаторах портала, ни в последнем снимке RPZ-зоны.</div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

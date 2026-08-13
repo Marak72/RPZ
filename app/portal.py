@@ -38,9 +38,9 @@ SERVICES: tuple[Service, ...] = (
         title="РПЗ ФСТЭК",
         subtitle="блокировка доменов",
         icon="shield",
-        endpoint="main.dashboard",
-        blueprint="main",
-        nav_template="nav/_fstec.html",
+        endpoint="fstec.dashboard",
+        blueprint="fstec",
+        nav_template="fstec/nav.html",
     ),
     Service(
         id="tasks",
@@ -49,7 +49,7 @@ SERVICES: tuple[Service, ...] = (
         icon="list",
         endpoint="tasks.board",
         blueprint="tasks",
-        nav_template="nav/_tasks.html",
+        nav_template="tasks/nav.html",
     ),
     Service(
         id="skydns",
@@ -58,7 +58,7 @@ SERVICES: tuple[Service, ...] = (
         icon="activity",
         endpoint="skydns.dashboard",
         blueprint="skydns",
-        nav_template="nav/_skydns.html",
+        nav_template="skydns/nav.html",
     ),
 )
 

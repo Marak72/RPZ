@@ -7,8 +7,8 @@ import shlex
 
 import pytest
 
-from app.services import rpz_writer
-from app.services.rpz_writer import PushError
+from app.services.fstec.lib import rpz_writer
+from app.services.fstec.lib.rpz_writer import PushError
 
 ZONE = """$TTL 60
 @   IN  SOA localhost. root.localhost. (

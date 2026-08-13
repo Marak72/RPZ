@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% set file_count = letter_groups | map(attribute='files') | map('length') | sum %}
+{% block title %}Предпросмотр{% endblock %}
+{% block subheading %}<div class="topbar__sub">
+  писем: {{ letter_groups|length }} · файлов: {{ file_count }}
+</div>{% endblock %}
+
+{% macro rows_table(id, items, group, kind, multi) %}
+<div class="card">
+  <div class="toolbar">
+    <div class="search">
+      {{ ico.icon('search') }}
+      <input type="search" placeholder="Фильтр" data-filter="{{ id }}">
+    </div>
+    <button type="button" class="btn btn--sm" data-select-all="{{ group }}" data-select-mode="all">Все</button>
+    <button type="button" class="btn btn--sm" data-select-all="{{ group }}" data-select-mode="none">Снять</button>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="{{ id }}">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать</span>
+    </button>
+  </div>
+  <div class="table-wrap table-wrap--tall">
+    <table class="table" id="{{ id }}">
+      <thead>
+        <tr>
+          <th class="col-check"></th>
+          <th>{{ 'URL' if kind == 'url' else ('Хеш' if kind == 'hash' else 'Значение') }}</th>
+          {% if kind == 'url' %}<th>Хост</th>{% endif %}
+          {% if kind == 'hash' %}<th>Тип</th>{% endif %}
+          {% if multi %}<th>Из письма / файла</th>{% endif %}
+          <th>Статус</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td>
+            <input type="checkbox" data-select="{{ group }}"
+                   name="{{ 'selected_url' if kind == 'url' else ('selected_hash' if kind == 'hash' else 'selected') }}"
+                   value="{{ it.file }}|{{ it.value }}" {% if not it.already_in_db %}checked{% endif %}>
+          </td>
+          <td class="value {% if kind == 'url' %}url-cell{% endif %}" data-value="{{ it.value }}">{{ it.value }}</td>
+          {% if kind == 'url' %}<td class="mono muted">{{ it.host }}</td>{% endif %}
+          {% if kind == 'hash' %}<td><span class="badge badge--info">{{ it.type }}</span></td>{% endif %}
+          {% if multi %}
+          <td class="text-xs muted">
+            {% if it.letters %}<strong>{{ it.letters | join(', ') }}</strong><br>{% endif %}
+            {{ it.file_name }}
+          </td>
+          {% endif %}
+          <td>
+            {% if it.get('in_rpz') %}<span class="badge badge--success">уже в RPZ</span>
+            {% elif it.already_in_db %}<span class="badge badge--neutral">уже в базе</span>
+            {% else %}<span class="badge badge--warning">новый</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="6"><div class="empty"><div class="empty__title">Не найдено</div></div></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Что распознано</h2>
+    <p>
+      Писем: <strong>{{ letter_groups|length }}</strong>,
+      файлов: <strong>{{ file_count }}</strong>,
+      индикаторов: <strong>{{ total }}</strong>.
+      Проверьте реквизиты и снимите галочки с лишнего.
+    </p>
+    <p class="text-sm muted">
+      Файлы с одинаковым номером сведены в одно письмо. Если номер уже есть
+      в архиве, файлы и индикаторы добавятся к существующему письму, а не
+      создадут его двойник. Повторяющиеся индикаторы показаны один раз.
+    </p>
+  </div>
+</div>
+
+<form method="post" action="{{ url_for('fstec.preview_save') }}" data-select-scope>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="notes" value="{{ notes }}">
+  {# Структура «письмо → файлы»: по ней создаются письма при сохранении. #}
+  <input type="hidden" name="groups_json" value="{{ groups_json }}">
+  {# скрытые поля со всеми найденными значениями — для выгрузки CSV #}
+  {% for it in groups.domains %}<input type="hidden" name="all_domain" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.ips %}<input type="hidden" name="all_ip" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.urls %}<input type="hidden" name="all_url" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.hashes %}
+    <input type="hidden" name="all_hash" value="{{ it.value }}">
+    <input type="hidden" name="htype_{{ it.value }}" value="{{ it.type }}">
+  {% endfor %}
+
+  <div class="btn-group" style="margin-bottom:1rem">
+    <button type="submit" class="btn btn--primary">{{ ico.icon('check') }} Сохранить выбранные</button>
+    <button type="submit" formaction="{{ url_for('fstec.preview_csv') }}" formnovalidate class="btn">
+      {{ ico.icon('download') }} Скачать всё в CSV
+    </button>
+    <a href="{{ url_for('fstec.upload') }}" class="btn btn--ghost">Отмена</a>
+    <div class="toolbar__spacer"></div>
+    <span class="text-sm muted">Выбрано: <strong data-selected-count>0</strong></span>
+  </div>
+
+  {# --- Распознанные письма ---------------------------------------------- #}
+  <div class="card" style="margin-bottom:1rem">
+    <div class="card__header">{{ ico.icon('inbox') }}<span class="card__title">Распознанные письма</span>
+      <span class="badge badge--neutral" style="margin-left:auto">{{ letter_groups|length }}</span>
+    </div>
+    <div class="card__body">
+      {# Номера, найденные в этой пачке: чтобы приложение без номера можно
+         было отправить в нужное письмо, не набирая номер руками. #}
+      <datalist id="detected-numbers">
+        {% for g in letter_groups if g.number %}
+        <option value="{{ g.number }}"></option>
+        {% endfor %}
+      </datalist>
+      {% for g in letter_groups %}
+      {% set gi = loop.index0 %}
+      <div style="padding-bottom:.75rem{% if not loop.last %};margin-bottom:.75rem;border-bottom:1px solid var(--border){% endif %}">
+        <div class="row">
+          <div class="field">
+            <label class="label" for="gn{{ gi }}">Номер письма</label>
+            <input id="gn{{ gi }}" name="group_number_{{ gi }}"
+                   value="{{ g.number }}" placeholder="240/24/1234"
+                   list="detected-numbers">
+            {% if not g.number %}
+            <div class="help">
+              Номер не распознан — обычно так выглядят приложения.
+              {% set others = letter_groups | selectattr('number') | list %}
+              {% if others %}
+              Впишите номер или отправьте эти файлы в письмо пачки:
+              <span class="inline" style="flex-wrap:wrap;gap:.25rem;margin-top:.25rem">
+                {% for other in others %}
+                <button type="button" class="btn btn--sm"
+                        data-set-field="group_number_{{ gi }}"
+                        data-set-value="{{ other.number }}">→ {{ other.number }}</button>
+                {% endfor %}
+              </span>
+              {% else %}
+              Впишите его, иначе письмо останется «без номера».
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+          <div class="field">
+            <label class="label" for="gd{{ gi }}">Дата письма</label>
+            <input id="gd{{ gi }}" type="date" name="group_date_{{ gi }}" value="{{ g.date }}">
+          </div>
+        </div>
+        <div class="text-xs muted">
+          Файлы:
+          {% for f in g.files %}
+          <span class="badge {% if f.is_primary %}badge--primary{% else %}badge--neutral{% endif %}">{{ f.filename }}</span>
+          {% if f.duplicate_of %}<span class="badge badge--warning">уже загружен ({{ f.duplicate_of }})</span>{% endif %}
+          {% if f.error %}<span class="badge badge--danger" title="{{ f.error }}">не разобран</span>{% endif %}
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% set multi = letter_groups|length > 1 or file_count > 1 %}
+  <div data-tabs class="tabs">
+    <button type="button" class="tab is-active" data-tab="dom">
+      {{ ico.icon('globe', 'icon icon-sm') }} Домены <span class="tab__count">{{ groups.domains|length }}</span></button>
+    <button type="button" class="tab" data-tab="ip">
+      {{ ico.icon('server', 'icon icon-sm') }} IP <span class="tab__count">{{ groups.ips|length }}</span></button>
+    <button type="button" class="tab" data-tab="url">
+      {{ ico.icon('link', 'icon icon-sm') }} URL с путями <span class="tab__count">{{ groups.urls|length }}</span></button>
+    <button type="button" class="tab" data-tab="hash">
+      {{ ico.icon('hash', 'icon icon-sm') }} Хеши <span class="tab__count">{{ groups.hashes|length }}</span></button>
+  </div>
+
+  <div>
+    <div data-tab-panel="dom" class="tab-panel is-active">
+      <p class="text-sm muted" style="margin-bottom:.5rem">Домены можно выгрузить в RPZ-зону.</p>
+      {{ rows_table('pvDom', groups.domains, 'dom', 'domain', multi) }}
+    </div>
+    <div data-tab-panel="ip" class="tab-panel">
+      <p class="text-sm muted" style="margin-bottom:.5rem">IP-адреса в RPZ не выгружаются — блокируются на межсетевом экране.</p>
+      {{ rows_table('pvIp', groups.ips, 'ip', 'ip', multi) }}
+    </div>
+    <div data-tab-panel="url" class="tab-panel">
+      <p class="text-sm muted" style="margin-bottom:.5rem">Пути RPZ не блокирует — хост при этом сохраняется во вкладке «Домены».</p>
+      {{ rows_table('pvUrl', groups.urls, 'url', 'url', multi) }}
+    </div>
+    <div data-tab-panel="hash" class="tab-panel">
+      <p class="text-sm muted" style="margin-bottom:.5rem">Хеши сохраняются отдельным списком для SIEM.</p>
+      {{ rows_table('pvHash', groups.hashes, 'hash', 'hash', multi) }}
+    </div>
+  </div>
+</form>
+{% endblock %}

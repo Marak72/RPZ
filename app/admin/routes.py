@@ -21,8 +21,8 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
-from ..extensions import db
-from ..models import ROLE_ADMIN, ROLES, User, UserService
+from ..core.extensions import db
+from ..core.models import ROLES, ROLE_ADMIN, User, UserService
 from ..portal import SERVICES
 from .forms import PasswordForm, ProfileForm, UserForm
 

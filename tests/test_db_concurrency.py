@@ -17,8 +17,10 @@ from sqlalchemy import text
 from config import Config
 
 from app import create_app
-from app.extensions import db
-from app.models import Task, ThreatDomain, User
+from app.core.extensions import db
+from app.core.models import User
+from app.services.skydns.models import ThreatDomain
+from app.services.tasks.models import Task
 
 
 @pytest.fixture

@@ -10,18 +10,10 @@ from datetime import date
 from flask import Blueprint, render_template
 from flask_login import current_user, login_required
 
-from ..extensions import db
-from ..models import (
-    STATUS_NEW,
-    TASK_DONE,
-    THREAT_NEW,
-    BlockEntry,
-    Document,
-    RpzSnapshot,
-    Task,
-    ThreatDomain,
-    ThreatHost,
-)
+from ..core.extensions import db
+from ..services.fstec.models import STATUS_NEW, BlockEntry, Letter, RpzSnapshot
+from ..services.skydns.models import THREAT_NEW, ThreatDomain, ThreatHost
+from ..services.tasks.models import TASK_DONE, Task
 from sqlalchemy import func
 
 hub_bp = Blueprint("hub", __name__)
@@ -40,7 +32,7 @@ def index():
         fstec = {
             "blocked": blocked,
             "pending": pending,
-            "documents": Document.query.count(),
+            "documents": Letter.query.count(),
             "updated": snapshot.fetched_at if snapshot else None,
         }
         skydns = {

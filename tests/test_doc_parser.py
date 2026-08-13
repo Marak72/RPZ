@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from app.services import doc_parser
+from app.services.fstec.lib import doc_parser
 
 # Фикстура составлена по реальному письму ФСТЭК: индикаторы на отдельных
 # строках, имена вложений/названия ПО/ссылки-источники — внутри предложений.

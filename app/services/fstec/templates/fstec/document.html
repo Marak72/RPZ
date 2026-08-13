@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ letter.title }}{% endblock %}
+{% block subheading %}<div class="topbar__sub">Письмо ФСТЭК</div>{% endblock %}
+
+{% macro entry_rows(items, kind) %}
+<div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr><th>Значение</th>{% if kind == 'addr' %}<th>Статус</th><th>VT</th>{% endif %}
+          {% if kind == 'url' %}<th>Хост</th>{% endif %}
+          {% if kind == 'hash' %}<th>Тип</th>{% endif %}
+          <th>Ещё в письмах</th></tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      <tr>
+        <td class="value {% if kind == 'url' %}url-cell{% endif %}" data-value="{{ it.value }}">
+          {% if kind == 'addr' %}
+          <a href="{{ url_for('fstec.object_view', entry_id=it.id) }}">{{ it.value }}</a>
+          {% else %}{{ it.value }}{% endif %}
+          <button type="button" class="copy-btn" data-copy="{{ it.value }}">{{ ico.icon('copy', 'icon icon-sm') }}</button>
+        </td>
+        {% if kind == 'addr' %}
+        <td>
+          {% if it.status == 'new' %}<span class="badge badge--warning">не в RPZ</span>
+          {% elif it.status == 'in_rpz' %}<span class="badge badge--neutral">в RPZ</span>
+          {% elif it.status == 'fp' %}<span class="badge badge--info">ложное</span>
+          {% elif it.status == 'ignored' %}<span class="badge badge--info">не блокируем</span>
+          {% else %}<span class="badge badge--success">выгружен</span>{% endif %}
+        </td>
+        <td>{% include "_vt_badge.html" with context %}</td>
+        {% endif %}
+        {% if kind == 'url' %}<td class="mono muted">{{ it.host }}</td>{% endif %}
+        {% if kind == 'hash' %}<td><span class="badge badge--info">{{ it.hash_type }}</span></td>{% endif %}
+        <td class="text-xs muted">
+          {% set others = it.letters | rejectattr('id', 'equalto', letter.id) | list %}
+          {% if others %}
+            {% for other in others %}
+            <a href="{{ url_for('fstec.letter_view', letter_id=other.id) }}">{{ other.number or '#' ~ other.id }}</a>{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr data-empty><td colspan="4"><div class="empty"><div class="empty__text">Нет записей этого типа.</div></div></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{% macro requisites_form() %}
+<div class="card {% if letter.number %}mt-2{% endif %}"
+     {% if not letter.number %}style="margin-bottom:1rem"{% endif %}>
+  <div class="card__header">{{ ico.icon('settings') }}<span class="card__title">Реквизиты письма</span></div>
+  <div class="card__body">
+    <form method="post" action="{{ url_for('fstec.letter_edit', letter_id=letter.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="row">
+        <div class="field">
+          <label class="label" for="letter-number">Номер письма</label>
+          <input id="letter-number" name="number" value="{{ letter.number }}" placeholder="240/24/1234">
+        </div>
+        <div class="field">
+          <label class="label" for="letter-date">Дата письма</label>
+          <input id="letter-date" type="date" name="letter_date"
+                 value="{{ letter.letter_date.isoformat() if letter.letter_date else '' }}">
+        </div>
+      </div>
+      <div class="field">
+        <label class="label" for="letter-subject">Тема</label>
+        <input id="letter-subject" name="subject" value="{{ letter.subject }}"
+               placeholder="о компьютерных атаках…">
+      </div>
+      <div class="field">
+        <label class="label" for="letter-notes">Примечание</label>
+        <input id="letter-notes" name="notes" value="{{ letter.notes }}">
+      </div>
+      <button class="btn btn--primary btn--sm">Сохранить реквизиты</button>
+    </form>
+  </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ letter.title }}</h2>
+    <p>
+      {%- if letter.letter_date %}от {{ letter.letter_date.strftime('%d.%m.%Y') }} · {% endif -%}
+      загружено {{ letter.created_at.strftime('%d.%m.%Y %H:%M') }} UTC
+      {%- if letter.user %}, {{ letter.user.username }}{% endif %}
+    </p>
+    {% if letter.subject %}<p class="muted">{{ letter.subject }}</p>{% endif %}
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('fstec.documents') }}">← Все письма</a>
+    <a class="btn" href="{{ url_for('fstec.document_csv', letter_id=letter.id) }}"
+       title="Домены, IP, URL и хеши этого письма одним файлом">
+      {{ ico.icon('download') }} Экспорт CSV
+    </a>
+    {% if current_user.is_operator %}
+    <form method="post" action="{{ url_for('fstec.document_delete', letter_id=letter.id) }}"
+          data-confirm="1" data-confirm-title="Удалить письмо?"
+          data-confirm-ok="Удалить"
+          data-confirm-body="Письмо и все его файлы будут удалены.<br>Индикаторы останутся в базе, но потеряют привязку к этому письму.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--ghost" title="Удалить письмо из архива">
+        {{ ico.icon('x') }} Удалить письмо
+      </button>
+    </form>
+    {% endif %}
+  </div>
+</div>
+
+{% if letter.notes %}<div class="note" style="margin-bottom:1rem">{{ letter.notes }}</div>{% endif %}
+
+{% if current_user.is_operator and not letter.number %}
+<div class="note note--warning" style="margin-bottom:1rem">
+  <strong>У письма не распознан номер.</strong> Укажите его — тогда приложения,
+  загруженные позже, сами попадут в это же письмо, а индикаторы будут ссылаться
+  на номер, а не на имя файла.
+</div>
+{{ requisites_form() }}
+{% endif %}
+
+<div class="grid grid--2">
+  {# --- Файлы письма ---------------------------------------------------- #}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('file') }}<span class="card__title">Файлы письма</span>
+      <span class="badge badge--neutral" style="margin-left:auto">{{ letter.files|length }}</span>
+    </div>
+    <div class="card__body card__body--flush">
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            {% for f in letter.files %}
+            <tr>
+              <td>
+                <a href="{{ url_for('fstec.letter_file', letter_id=letter.id, file_id=f.id) }}"
+                   target="_blank">{{ f.filename }}</a>
+                {% if f.is_primary %}<span class="badge badge--primary">письмо</span>
+                {% else %}<span class="badge badge--neutral">приложение</span>{% endif %}
+                {% if f.is_pdf %}<span class="badge badge--danger">PDF</span>{% endif %}
+                {% if f.parse_error %}
+                <div class="text-xs muted" title="{{ f.parse_error }}">⚠ {{ f.parse_error|truncate(90) }}</div>
+                {% endif %}
+              </td>
+              <td class="text-xs muted nowrap">{{ f.size_kb }} КБ</td>
+              <td class="text-xs muted nowrap">
+                {% if f.entries_found %}{{ f.entries_found }} индик.{% else %}—{% endif %}
+              </td>
+              <td class="num nowrap">
+                {% if current_user.is_operator %}
+                <form method="post" data-confirm="1" data-confirm-title="Удалить файл?"
+                      data-confirm-ok="Удалить"
+                      data-confirm-body="Файл «{{ f.filename }}» будет удалён из письма. Индикаторы останутся."
+                      action="{{ url_for('fstec.letter_file_delete', letter_id=letter.id, file_id=f.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <button class="btn btn--ghost btn--sm" title="Удалить файл">{{ ico.icon('x', 'icon icon-sm') }}</button>
+                </form>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr data-empty><td colspan="4"><div class="empty"><div class="empty__text">Файлов нет.</div></div></td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% set main = letter.main_file %}
+      {% if main and main.is_pdf %}
+      <div style="padding:1rem">
+        <embed src="{{ url_for('fstec.letter_file', letter_id=letter.id, file_id=main.id) }}#view=FitH"
+               type="application/pdf" style="width:100%;height:420px;border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <div class="mt-1 text-xs muted">
+          Если PDF не отображается,
+          <a href="{{ url_for('fstec.letter_file', letter_id=letter.id, file_id=main.id) }}" target="_blank">откройте его в новой вкладке</a>.
+        </div>
+      </div>
+      {% endif %}
+
+      {% if current_user.is_operator %}
+      <div style="padding:0 1rem 1rem">
+        <form method="post" enctype="multipart/form-data"
+              action="{{ url_for('fstec.letter_add_files', letter_id=letter.id) }}">
+          {{ add_form.hidden_tag() }}
+          <div class="field">
+            {{ add_form.documents.label(class="label") }}
+            {{ add_form.documents(accept=".docx,.odt,.pdf", multiple=True) }}
+            <div class="help">Приложения к письму часто приходят позже — их можно
+              дослать сюда, второе письмо с тем же номером заводить не нужно.</div>
+          </div>
+          <button class="btn btn--sm">{{ ico.icon('upload') }} Добавить файлы</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# --- Индикаторы письма ----------------------------------------------- #}
+  <div class="card">
+    <div class="card__header">{{ ico.icon('list') }}<span class="card__title">Индикаторы письма</span>
+      <span class="badge badge--neutral" style="margin-left:auto">
+        всего: {{ domains|length + ips|length + urls|length + hashes|length }}
+      </span>
+    </div>
+    <div class="card__body card__body--flush">
+      <div data-tabs class="tabs" style="padding:0 1rem;margin-bottom:0">
+        <button class="tab is-active" data-tab="d">Домены <span class="tab__count">{{ domains|length }}</span></button>
+        <button class="tab" data-tab="i">IP <span class="tab__count">{{ ips|length }}</span></button>
+        <button class="tab" data-tab="u">URL <span class="tab__count">{{ urls|length }}</span></button>
+        <button class="tab" data-tab="h">Хеши <span class="tab__count">{{ hashes|length }}</span></button>
+      </div>
+      <div style="max-height:520px;overflow:auto">
+        <div data-tab-panel="d" class="tab-panel is-active">{{ entry_rows(domains, 'addr') }}</div>
+        <div data-tab-panel="i" class="tab-panel">{{ entry_rows(ips, 'addr') }}</div>
+        <div data-tab-panel="u" class="tab-panel">{{ entry_rows(urls, 'url') }}</div>
+        <div data-tab-panel="h" class="tab-panel">{{ entry_rows(hashes, 'hash') }}</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if current_user.is_operator and letter.number %}
+{{ requisites_form() }}
+{% endif %}
+{% endblock %}

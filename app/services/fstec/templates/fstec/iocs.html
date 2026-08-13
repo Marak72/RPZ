@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Хеши (IoC){% endblock %}
+{% block subheading %}<div class="topbar__sub">Индикаторы компрометации для SIEM</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Хеши — индикаторы компрометации</h2>
+    <p>Хеши не блокируются в RPZ: они предназначены для правил корреляции в системе мониторинга.</p>
+  </div>
+  <a class="btn" href="{{ url_for('fstec.iocs_csv', **request.args) }}">{{ ico.icon('download') }} Экспорт CSV</a>
+</div>
+
+<div class="tabs">
+  <a class="tab {% if not htype %}is-active{% endif %}" href="{{ url_for('fstec.iocs') }}">Все</a>
+  {% for t, c in counts.items() %}
+  <a class="tab {% if htype == t %}is-active{% endif %}" href="{{ url_for('fstec.iocs', type=t) }}">
+    {{ t }} <span class="tab__count">{{ c }}</span></a>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      {% if htype %}<input type="hidden" name="type" value="{{ htype }}">{% endif %}
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Поиск по хешу" data-search-focus>
+      </div>
+      <button class="btn btn--sm">Найти</button>
+      {% if q %}<a class="btn btn--ghost btn--sm" href="{{ url_for('fstec.iocs', type=htype) if htype else url_for('fstec.iocs') }}">Сбросить</a>{% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="iocTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать список</span>
+    </button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table" id="iocTable">
+      <thead>
+        <tr><th>Хеш</th><th>Тип</th><th>Источник</th><th>Добавлен</th></tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+        <tr>
+          <td class="value" data-value="{{ it.value }}">
+            {{ it.value }}
+            <button type="button" class="copy-btn" data-copy="{{ it.value }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td><span class="badge badge--info">{{ it.hash_type }}</span></td>
+          <td class="muted text-xs">{{ it.document.filename if it.document else '—' }}</td>
+          <td class="muted nowrap text-xs">{{ it.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="4">
+            <div class="empty">
+              {{ ico.icon('hash') }}
+              <div class="empty__title">Хешей нет</div>
+              <div class="empty__text">Они появятся после загрузки письма с индикаторами компрометации.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}
