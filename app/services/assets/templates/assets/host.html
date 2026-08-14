@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}{{ ip }}{% endblock %}
+{% block subheading %}<div class="topbar__sub">Карточка адреса</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>{{ ip }}
+      {% if host %}<span class="badge {{ host.kind_badge }}">{{ host.kind_title }}</span>{% endif %}
+    </h2>
+    <p>
+      {% if host and host.display_name %}
+        {{ host.display_name }}
+      {% elif host %}
+        Имя узла неизвестно: аренда есть, но имя в ней не записано.
+      {% else %}
+        Этого адреса ещё нет в базе портала.
+      {% endif %}
+    </p>
+  </div>
+  <div class="btn-group">
+    <form method="post" action="{{ url_for('assets.host_refresh', ip=ip) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn--primary" {% if not (dhcp_configured or ad_configured) %}disabled{% endif %}
+              title="Спросить у DHCP и AD, что стоит за адресом прямо сейчас">
+        {{ ico.icon('refresh') }} Проверить сейчас
+      </button>
+    </form>
+  </div>
+</div>
+
+{% if host and host.is_infrastructure %}
+{# Честное предупреждение важнее красивой карточки: за таким адресом
+   сотрудника нет, и искать его дальше — пустая трата времени. #}
+<div class="alert alert--info">
+  {{ ico.icon('info') }}
+  <div class="alert__text">
+    Это <strong>{{ host.kind_title|lower }}</strong>, а не рабочее место. Если адрес
+    пришёл из SkyDNS или SIEM, событие принадлежит не сотруднику, а самому узлу:
+    для площадки со своим DNS-форвардером источником запроса становится
+    форвардер. Конкретного человека надо искать в журналах этого узла.
+  </div>
+</div>
+{% endif %}
+
+{% if host and host.lease_expired %}
+<div class="alert alert--warning">
+  {{ ico.icon('alert') }}
+  <div class="alert__text">
+    Срок аренды истёк {{ host.lease_expires_at.strftime('%d.%m.%Y %H:%M') }} —
+    сейчас за адресом может стоять уже другая машина. Нажмите «Проверить сейчас».
+  </div>
+</div>
+{% endif %}
+
+{% if not host %}
+<div class="card">
+  <div class="card__body">
+    <div class="empty">
+      {{ ico.icon('search') }}
+      <div class="empty__title">В базе портала адреса нет</div>
+      <div class="empty__text">
+        {% if scope %}
+          Адрес попадает в область DHCP <strong>{{ scope.scope_id }}</strong>
+          ({{ scope.name }}) на сервере {{ scope.server }}, но аренда за ним не
+          числится. Нажмите «Проверить сейчас», чтобы спросить сервер напрямую.
+        {% else %}
+          Адрес не попадает ни в одну известную область DHCP — скорее всего он
+          назначен статически. Такие узлы в аренды не попадают: заведите его
+          вручную или запустите выгрузку, если области ещё не собраны.
+        {% endif %}
+      </div>
+      <a class="btn btn--sm" href="{{ url_for('assets.hosts') }}">К списку адресов</a>
+    </div>
+  </div>
+</div>
+{% else %}
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('server') }}<span class="card__title">Аренда DHCP</span>
+      {% if host.is_reservation %}
+      <span class="badge badge--primary" style="margin-left:auto">резервирование</span>
+      {% endif %}
+    </div>
+    <div class="card__body">
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            <tr><td class="muted">Имя из аренды</td>
+                <td class="value">{{ host.hostname or '—' }}</td></tr>
+            <tr><td class="muted">MAC</td>
+                <td class="value" data-value="{{ host.mac }}">
+                  {{ host.mac or '—' }}
+                  {% if host.mac %}
+                  <button type="button" class="copy-btn" data-copy="{{ host.mac }}" title="Скопировать">
+                    {{ ico.icon('copy', 'icon icon-sm') }}
+                  </button>
+                  {% endif %}
+                </td></tr>
+            <tr><td class="muted">Состояние</td>
+                <td>{{ host.lease_state or '—' }}</td></tr>
+            <tr><td class="muted">Аренда до</td>
+                <td>{{ host.lease_expires_at.strftime('%d.%m.%Y %H:%M') if host.lease_expires_at else '—' }}</td></tr>
+            <tr><td class="muted">Сервер DHCP</td>
+                <td>{{ host.dhcp_server or '—' }}</td></tr>
+            <tr><td class="muted">Область</td>
+                <td>
+                  {% if scope %}{{ scope.scope_id }} · {{ scope.name }}
+                  {% else %}{{ host.scope_id or '—' }}{% endif %}
+                </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('users') }}<span class="card__title">Active Directory</span>
+      {% if computer and not computer.enabled %}
+      <span class="badge badge--danger" style="margin-left:auto">объект отключён</span>
+      {% endif %}
+    </div>
+    <div class="card__body">
+      {% if computer %}
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            <tr><td class="muted">Имя</td><td class="value">{{ computer.name }}</td></tr>
+            <tr><td class="muted">Подразделение</td>
+                <td>{{ computer.ou_path or '—' }}</td></tr>
+            <tr><td class="muted">Описание</td>
+                <td>{{ computer.description or '—' }}</td></tr>
+            <tr><td class="muted">Операционная система</td>
+                <td>{{ computer.os or '—' }}
+                    {% if computer.os_version %}<span class="muted text-xs">{{ computer.os_version }}</span>{% endif %}</td></tr>
+            <tr><td class="muted">Последний вход</td>
+                <td>{{ computer.last_logon.strftime('%d.%m.%Y %H:%M') if computer.last_logon else '—' }}</td></tr>
+            <tr><td class="muted">Заведён</td>
+                <td>{{ computer.when_created.strftime('%d.%m.%Y') if computer.when_created else '—' }}</td></tr>
+            {% if computer.managed_by %}
+            <tr><td class="muted">Ответственный</td>
+                <td class="text-xs">{{ computer.managed_by }}</td></tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('users') }}
+        <div class="empty__title">Объекта в каталоге нет</div>
+        <div class="empty__text">
+          {% if host.hostname %}
+            Машины с именем «{{ host.hostname }}» в Active Directory не нашлось.
+            Так бывает у сетевого оборудования, гостевых и личных устройств —
+            их в домен не заводят.
+          {% else %}
+            Имя узла неизвестно, поэтому искать объект в каталоге не по чему.
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('clock') }}<span class="card__title">История адреса</span>
+    </div>
+    <div class="card__body">
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Когда</th><th>Что изменилось</th></tr></thead>
+          <tbody>
+            {% for row in observations %}
+            <tr>
+              <td class="muted nowrap text-xs">{{ row.seen_at.strftime('%d.%m.%Y %H:%M') }}</td>
+              <td class="text-sm">{{ row.change }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="2" class="muted">Изменений не зафиксировано.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="help">
+        Записывается только то, что действительно изменилось: имя, MAC или
+        состояние аренды. Иначе история распухла бы от повторов выгрузки.
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('file') }}<span class="card__title">Заметка аналитика</span>
+    </div>
+    <div class="card__body">
+      {% if current_user.is_operator %}
+      <form method="post">
+        {{ notes_form.hidden_tag() }}
+        <div class="field">
+          {{ notes_form.notes(rows=4, placeholder="Например: киоск в холле, за ним никто не сидит") }}
+        </div>
+        <button class="btn btn--sm">{{ ico.icon('check') }} Сохранить заметку</button>
+      </form>
+      {% elif host.notes %}
+      <p class="text-sm">{{ host.notes }}</p>
+      {% else %}
+      <p class="muted text-sm">Заметок нет.</p>
+      {% endif %}
+
+      <div class="table-wrap" style="margin-top:1rem">
+        <table class="table">
+          <thead><tr><th colspan="3">Кто смотрел этот адрес</th></tr></thead>
+          <tbody>
+            {% for row in lookups %}
+            <tr>
+              <td class="muted nowrap text-xs">{{ row.created_at.strftime('%d.%m %H:%M') }}</td>
+              <td class="text-xs">{{ row.user.display_name if row.user else '—' }}</td>
+              <td class="text-xs">
+                {% if row.is_live %}<span class="badge badge--info">живой запрос</span>{% endif %}
+                {{ row.error or row.result }}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="muted">Обращений не было.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card__footer">
+      <span class="muted text-xs">
+        Источник записи: {{ host.source_title }}.
+        Последняя выгрузка: {{ host.last_seen.strftime('%d.%m.%Y %H:%M') if host.last_seen else '—' }}.
+        {% if host.checked_at %}
+        Живая проверка: {{ host.checked_at.strftime('%d.%m.%Y %H:%M') }}.
+        {% endif %}
+      </span>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

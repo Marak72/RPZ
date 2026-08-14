@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Адреса{% endblock %}
+{% block subheading %}<div class="topbar__sub">База адресов сети</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Адреса</h2>
+    <p>Всё, что известно порталу про адреса сети: имя и MAC из аренды DHCP,
+       подразделение и описание из Active Directory.</p>
+  </div>
+  <div class="btn-group">
+    <a class="btn" href="{{ url_for('assets.hosts_csv', **request.args) }}">
+      {{ ico.icon('download') }} Экспорт CSV</a>
+  </div>
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Адрес, имя или MAC" data-search-focus>
+      </div>
+      <select name="kind" onchange="this.form.submit()">
+        <option value="">Любой вид</option>
+        {% for value, title in kinds.items() %}
+        <option value="{{ value }}" {% if kind == value %}selected{% endif %}>{{ title }}</option>
+        {% endfor %}
+      </select>
+      <select name="scope" onchange="this.form.submit()">
+        <option value="">Любая область</option>
+        {% for row in scopes %}
+        <option value="{{ row.scope_id }}" {% if request.args.get('scope') == row.scope_id %}selected{% endif %}>
+          {{ row.scope_id }} · {{ row.name }}
+        </option>
+        {% endfor %}
+      </select>
+      {% if request.args.get('unlinked') %}
+      <input type="hidden" name="unlinked" value="1">
+      {% endif %}
+      <button class="btn btn--sm">Найти</button>
+      {% if q or kind or request.args.get('scope') or request.args.get('unlinked') %}
+      <a class="btn btn--ghost btn--sm" href="{{ url_for('assets.hosts') }}">Сбросить</a>
+      {% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="hostsTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать адреса</span>
+    </button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table" id="hostsTable">
+      <thead>
+        <tr>
+          <th>Адрес</th><th>Имя</th><th>Вид</th><th>Подразделение</th>
+          <th>MAC</th><th>Аренда до</th><th>Обновлено</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in items %}
+        <tr>
+          <td class="value nowrap" data-value="{{ row.ip }}">
+            <a href="{{ url_for('assets.host_view', ip=row.ip) }}">{{ row.ip }}</a>
+            <button type="button" class="copy-btn" data-copy="{{ row.ip }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td>{{ row.display_name or '—' }}</td>
+          <td><span class="badge {{ row.kind_badge }}">{{ row.kind_title }}</span></td>
+          <td class="text-xs muted">{{ row.ad_computer.ou_path if row.ad_computer else '—' }}</td>
+          <td class="text-xs">{{ row.mac or '—' }}</td>
+          <td class="muted nowrap text-xs">
+            {% if row.lease_expires_at %}
+              <span {% if row.lease_expired %}class="badge badge--warning"{% endif %}>
+                {{ row.lease_expires_at.strftime('%d.%m.%Y %H:%M') }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td class="muted nowrap text-xs">
+            {{ row.last_seen.strftime('%d.%m.%Y %H:%M') if row.last_seen else '—' }}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="7">
+            <div class="empty">
+              {{ ico.icon('server') }}
+              <div class="empty__title">Адресов пока нет</div>
+              <div class="empty__text">
+                {% if q or kind %}Измените условия поиска.
+                {% else %}Запустите выгрузку аренд DHCP — адреса появятся здесь.{% endif %}
+              </div>
+              {% if not q and current_user.is_operator %}
+              <a class="btn btn--sm" href="{{ url_for('assets.sync') }}">К выгрузке</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+
+{% if current_user.is_operator %}
+<div class="card">
+  <div class="card__header">
+    {{ ico.icon('upload') }}<span class="card__title">Добавить адрес вручную</span>
+  </div>
+  <div class="card__body">
+    <p class="text-sm muted">
+      Для узлов, которых нет ни в DHCP, ни в домене: статические адреса
+      серверов, сетевое оборудование, чужие сегменты.
+    </p>
+    <form method="post" action="{{ url_for('assets.host_add') }}">
+      {{ manual_form.hidden_tag() }}
+      <div class="row">
+        <div class="field">
+          {{ manual_form.ip.label(class="label") }}
+          {{ manual_form.ip(placeholder="10.10.24.11") }}
+        </div>
+        <div class="field">
+          {{ manual_form.hostname.label(class="label") }}
+          {{ manual_form.hostname(placeholder="socelkserver") }}
+        </div>
+        <div class="field" style="flex:2">
+          {{ manual_form.notes.label(class="label") }}
+          {{ manual_form.notes(rows=1, placeholder="Портал SOC, статический адрес") }}
+        </div>
+      </div>
+      <button class="btn btn--sm btn--primary">{{ ico.icon('check') }} Добавить</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

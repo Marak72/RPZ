@@ -180,5 +180,55 @@
     </div>
   </div>
   {% endif %}
+
+  {% if 'assets' in allowed %}
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('server') }}
+      <span class="card__title">Узлы сети</span>
+      <span class="badge badge--neutral" style="margin-left:auto">/assets/</span>
+    </div>
+    <div class="card__body">
+      <p class="text-sm muted">
+        Что за узел стоит за IP-адресом: имя и MAC из аренд DHCP, подразделение
+        и описание из Active Directory. Обратных записей DNS у рабочих станций
+        нет, поэтому связку «адрес — машина» даёт только DHCP.
+      </p>
+
+      <div class="grid grid--stats mt-2">
+        <a class="stat stat--primary" href="{{ url_for('assets.hosts') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('server') }}</span>
+            <span class="stat__label">Адресов</span>
+          </div>
+          <div class="stat__value">{{ assets.hosts }}</div>
+          <div class="stat__hint">известно порталу</div>
+        </a>
+        <a class="stat stat--info" href="{{ url_for('assets.computers') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('users') }}</span>
+            <span class="stat__label">Компьютеров AD</span>
+          </div>
+          <div class="stat__value">{{ assets.computers }}</div>
+          <div class="stat__hint">объектов каталога</div>
+        </a>
+        <a class="stat {{ 'stat--warning' if assets.unlinked else 'stat--success' }}"
+           href="{{ url_for('assets.hosts', unlinked='1') }}">
+          <div class="stat__top">
+            <span class="stat__icon">{{ ico.icon('link') }}</span>
+            <span class="stat__label">Без объекта AD</span>
+          </div>
+          <div class="stat__value">{{ assets.unlinked }}</div>
+          <div class="stat__hint">не заведены в домене</div>
+        </a>
+      </div>
+    </div>
+    <div class="card__footer">
+      <a class="btn btn--primary" href="{{ url_for('assets.dashboard') }}">
+        {{ ico.icon('grid') }} Открыть сервис
+      </a>
+    </div>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}

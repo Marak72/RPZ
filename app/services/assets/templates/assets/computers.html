@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Компьютеры AD{% endblock %}
+{% block subheading %}<div class="topbar__sub">Объекты компьютеров из Active Directory</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Компьютеры Active Directory</h2>
+    <p>Зеркало каталога, обновляется выгрузкой. Портал только читает AD —
+       изменить здесь ничего нельзя.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}"
+               placeholder="Имя, описание или подразделение" data-search-focus>
+      </div>
+      <button class="btn btn--sm">Найти</button>
+      {% if q %}<a class="btn btn--ghost btn--sm" href="{{ url_for('assets.computers') }}">Сбросить</a>{% endif %}
+    </form>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Имя</th><th>Подразделение</th><th>Описание</th><th>ОС</th>
+            <th>Последний вход</th><th>Адреса</th></tr>
+      </thead>
+      <tbody>
+        {% for row in items %}
+        <tr>
+          <td class="value">
+            {{ row.name }}
+            {% if not row.enabled %}<span class="badge badge--danger">отключён</span>{% endif %}
+          </td>
+          <td class="text-xs muted">{{ row.ou_path or '—' }}</td>
+          <td class="text-xs">{{ row.description or '—' }}</td>
+          <td class="text-xs">{{ row.os or '—' }}</td>
+          <td class="muted nowrap text-xs">
+            {{ row.last_logon.strftime('%d.%m.%Y') if row.last_logon else '—' }}
+          </td>
+          <td class="text-xs">
+            {% for h in row.hosts %}
+            <a href="{{ url_for('assets.host_view', ip=h.ip) }}">{{ h.ip }}</a>{{ ", " if not loop.last }}
+            {% else %}<span class="muted">аренды нет</span>{% endfor %}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="6">
+            <div class="empty">
+              {{ ico.icon('users') }}
+              <div class="empty__title">Компьютеров пока нет</div>
+              <div class="empty__text">
+                {% if q %}Измените условия поиска.
+                {% else %}Запустите выгрузку из Active Directory.{% endif %}
+              </div>
+              {% if not q and current_user.is_operator %}
+              <a class="btn btn--sm" href="{{ url_for('assets.sync') }}">К выгрузке</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

@@ -1,0 +1,47 @@
+{# Боковая навигация сервиса «Узлы сети». #}
+<div class="nav-group">
+  <a class="nav-link {% if ep == 'assets.dashboard' %}is-active{% endif %}" href="{{ url_for('assets.dashboard') }}">
+    {{ ico.icon('grid') }} Дашборд
+  </a>
+  <a class="nav-link {% if ep == 'assets.search' %}is-active{% endif %}" href="{{ url_for('assets.search') }}">
+    {{ ico.icon('search') }} Поиск
+  </a>
+</div>
+
+<div class="nav-group">
+  <div class="nav-group__title">База узлов</div>
+  <a class="nav-link {% if ep in ('assets.hosts', 'assets.host_view') %}is-active{% endif %}"
+     href="{{ url_for('assets.hosts') }}">
+    {{ ico.icon('server') }} Адреса
+    <span class="nav-link__count">{{ assets_counts.hosts }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'assets.computers' %}is-active{% endif %}"
+     href="{{ url_for('assets.computers') }}">
+    {{ ico.icon('users') }} Компьютеры AD
+    <span class="nav-link__count">{{ assets_counts.computers }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'assets.scopes' %}is-active{% endif %}"
+     href="{{ url_for('assets.scopes') }}">
+    {{ ico.icon('hash') }} Области DHCP
+    <span class="nav-link__count">{{ assets_counts.scopes }}</span>
+  </a>
+  <a class="nav-link {% if ep == 'assets.logs' %}is-active{% endif %}" href="{{ url_for('assets.logs') }}">
+    {{ ico.icon('list') }} Журнал обращений
+  </a>
+</div>
+
+<div class="nav-group">
+  <div class="nav-group__title">Действия</div>
+  {% if current_user.is_operator %}
+  <a class="nav-link {% if ep == 'assets.sync' %}is-active{% endif %}" href="{{ url_for('assets.sync') }}">
+    {{ ico.icon('download') }} Выгрузка данных
+  </a>
+  <a class="nav-link {% if ep == 'assets.settings' %}is-active{% endif %}"
+     href="{{ url_for('assets.settings') }}">
+    {{ ico.icon('settings') }} Настройки сервиса
+  </a>
+  {% endif %}
+  <a class="nav-link" href="{{ url_for('assets.hosts_csv') }}">
+    {{ ico.icon('download') }} Экспорт CSV
+  </a>
+</div>

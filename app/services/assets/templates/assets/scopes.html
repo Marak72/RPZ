@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Области DHCP{% endblock %}
+{% block subheading %}<div class="topbar__sub">Карта «адрес → сервер DHCP»</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Области DHCP</h2>
+    <p>Нужны, чтобы живая проверка адреса шла сразу на нужный сервер, а не
+       опрашивала все площадки подряд. Если адрес не попадает ни в одну
+       область — он статический, и аренды у него нет.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Сервер</th><th>Область</th><th>Название</th><th>Диапазон</th>
+            <th>Маска</th><th>Состояние</th><th class="num">Аренд</th><th>Обновлено</th></tr>
+      </thead>
+      <tbody>
+        {% for row in items %}
+        <tr>
+          <td class="text-xs">{{ row.server }}</td>
+          <td class="value">{{ row.scope_id }}</td>
+          <td class="text-xs">{{ row.name or '—' }}</td>
+          <td class="text-xs nowrap">{{ row.start_ip }} — {{ row.end_ip }}</td>
+          <td class="text-xs">{{ row.mask or '—' }}</td>
+          <td>
+            <span class="badge {{ 'badge--success' if row.is_active else 'badge--neutral' }}">
+              {{ row.state or '—' }}</span>
+          </td>
+          <td class="num">
+            <a href="{{ url_for('assets.hosts', scope=row.scope_id) }}">{{ row.lease_count }}</a>
+          </td>
+          <td class="muted nowrap text-xs">
+            {{ row.synced_at.strftime('%d.%m.%Y %H:%M') if row.synced_at else '—' }}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="8">
+            <div class="empty">
+              {{ ico.icon('hash') }}
+              <div class="empty__title">Областей пока нет</div>
+              <div class="empty__text">
+                Список областей собирается вместе с арендами: запустите выгрузку DHCP.
+              </div>
+              {% if current_user.is_operator %}
+              <a class="btn btn--sm" href="{{ url_for('assets.sync') }}">К выгрузке</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

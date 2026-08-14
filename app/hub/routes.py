@@ -11,6 +11,7 @@ from flask import Blueprint, render_template
 from flask_login import current_user, login_required
 
 from ..core.extensions import db
+from ..services.assets.models import AdComputer, NetworkHost
 from ..services.fstec.models import STATUS_NEW, BlockEntry, Letter, RpzSnapshot
 from ..services.skydns.models import THREAT_NEW, ThreatDomain, ThreatHost
 from ..services.tasks.models import TASK_DONE, Task
@@ -55,9 +56,18 @@ def index():
                 Task.due_date.isnot(None), Task.due_date < date.today()
             ).count(),
         }
+        assets = {
+            "hosts": NetworkHost.query.count(),
+            "computers": AdComputer.query.count(),
+            "unlinked": NetworkHost.query.filter(
+                NetworkHost.ad_computer_id.is_(None)
+            ).count(),
+        }
     except Exception:  # noqa: BLE001 — например, БД ещё не мигрирована
         fstec = {"blocked": 0, "pending": 0, "documents": 0, "updated": None}
         skydns = {"threats": 0, "new": 0, "hosts": 0, "unchecked": 0}
         tasks = {"open": 0, "mine": 0, "overdue": 0}
+        assets = {"hosts": 0, "computers": 0, "unlinked": 0}
 
-    return render_template("hub.html", fstec=fstec, skydns=skydns, tasks=tasks)
+    return render_template("hub.html", fstec=fstec, skydns=skydns, tasks=tasks,
+                           assets=assets)

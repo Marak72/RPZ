@@ -16,15 +16,20 @@
 Общее для всех лежит в ``app/core`` (база, шифрование, настройки, фоновые
 задания, VirusTotal) и ``app/templates`` (базовая вёрстка портала).
 
-Связи между сервисами допускаются, но только явные и узкие: сейчас это
-единственный случай — «Угрозы SkyDNS» отправляет разобранный домен в
-кандидаты «РПЗ ФСТЭК» (``services.fstec.models.BlockEntry``).
+Связи между сервисами допускаются, но только явные и узкие. Сейчас их две:
+
+  * «Угрозы SkyDNS» отправляет разобранный домен в кандидаты «РПЗ ФСТЭК»
+    (``services.fstec.models.BlockEntry``);
+  * «Угрозы SkyDNS» ссылается на карточку адреса в «Узлах сети» — это просто
+    ссылка, без общих таблиц и импортов.
 """
+from .assets import assets_bp
 from .fstec import fstec_bp
 from .skydns import skydns_bp
 from .tasks import tasks_bp
 
 #: Blueprint-ы всех сервисов — их регистрирует фабрика приложения.
-SERVICE_BLUEPRINTS = (fstec_bp, skydns_bp, tasks_bp)
+SERVICE_BLUEPRINTS = (fstec_bp, skydns_bp, tasks_bp, assets_bp)
 
-__all__ = ["SERVICE_BLUEPRINTS", "fstec_bp", "skydns_bp", "tasks_bp"]
+__all__ = ["SERVICE_BLUEPRINTS", "assets_bp", "fstec_bp", "skydns_bp",
+           "tasks_bp"]

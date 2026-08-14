@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Настройки{% endblock %}
+{% block subheading %}<div class="topbar__sub">Настройки сервиса «Узлы сети»</div>{% endblock %}
+{% block content_class %} content--narrow{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Подключения сервиса</h2>
+    <p>Откуда берутся сведения об узлах. Пароли хранятся в базе зашифрованными
+       и обратно в форму не подставляются.</p>
+  </div>
+</div>
+
+<div class="alert alert--info">
+  {{ ico.icon('info') }}
+  <div class="alert__text">
+    Сервису достаточно прав <strong>только на чтение</strong>: просмотр каталога
+    (есть у любой доменной учётной записи) и членство в группе
+    <code>DHCP Users</code> на серверах DHCP. Портал не выполняет ни одной
+    команды изменения — список разрешённых глаголов PowerShell проверяется
+    перед отправкой запроса.
+  </div>
+</div>
+
+<form method="post">
+  {{ ad_form.hidden_tag() }}
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('users') }}<span class="card__title">Active Directory</span>
+    </div>
+    <div class="card__body">
+      <div class="row">
+        <div class="field" style="flex:2">
+          {{ ad_form.host.label(class="label") }}
+          {{ ad_form.host(placeholder="10.61.7.17") }}
+          <div class="help">
+            Главный контроллер домена — тот, с которого видно всё. Часть
+            контроллеров закрыта межсетевым экраном, и опрашивать их бесполезно.
+          </div>
+        </div>
+        <div class="field">
+          {{ ad_form.port.label(class="label") }}
+          {{ ad_form.port(placeholder=default_ad_port) }}
+          <div class="help">
+            <strong>3268</strong> — глобальный каталог. Не меняйте на 389:
+            обычный LDAP отвечает только за свой раздел и не найдёт машину
+            с чужой площадки.
+          </div>
+        </div>
+      </div>
+
+      <div class="check">
+        {{ ad_form.use_ssl() }}
+        {{ ad_form.use_ssl.label() }}
+        <div class="help">LDAPS — порт 3269. Пароль и так не передаётся
+          открытым текстом (NTLM), но содержимое ответов шифроваться будет.</div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ ad_form.domain.label(class="label") }}
+          {{ ad_form.domain(placeholder="adm72.local") }}
+          <div class="help">Из него собирается база поиска, если её не задать.</div>
+        </div>
+        <div class="field" style="flex:2">
+          {{ ad_form.base_dn.label(class="label") }}
+          {{ ad_form.base_dn(placeholder="DC=adm72,DC=local") }}
+          <div class="help">Пусто — соберётся из домена автоматически.</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ ad_form.username.label(class="label") }}
+          {{ ad_form.username(placeholder="ADM72\\svc-soc", autocomplete="off") }}
+          <div class="help">Вид <code>ДОМЕН\пользователь</code> — этого требует NTLM.</div>
+        </div>
+        <div class="field">
+          {{ ad_form.password.label(class="label") }}
+          {{ ad_form.password(autocomplete="new-password") }}
+          <div class="help">
+            {% if ad_password_set %}Пароль сохранён. Оставьте пустым, чтобы не менять.
+            {% else %}Хранится в базе зашифрованным.{% endif %}
+          </div>
+        </div>
+        <div class="field">
+          {{ ad_form.timeout.label(class="label") }}
+          {{ ad_form.timeout() }}
+        </div>
+      </div>
+    </div>
+    <div class="card__footer">
+      <button name="submit_ad" value="1" class="btn btn--primary">
+        {{ ico.icon('check') }} Сохранить</button>
+      <button name="test_ad" value="1" class="btn">
+        {{ ico.icon('play') }} Проверить связь</button>
+    </div>
+  </div>
+</form>
+
+<form method="post">
+  {{ dhcp_form.hidden_tag() }}
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('server') }}<span class="card__title">DHCP через WinRM</span>
+    </div>
+    <div class="card__body">
+      <p class="text-sm muted">
+        У службы DHCP от Microsoft нет ни LDAP, ни HTTP-интерфейса: аренды
+        читаются командами PowerShell на самом сервере. Поэтому нужен WinRM.
+      </p>
+
+      <div class="row">
+        <div class="field" style="flex:2">
+          {{ dhcp_form.host.label(class="label") }}
+          {{ dhcp_form.host(placeholder="10.61.7.17") }}
+          <div class="help">
+            Любой сервер, где установлен модуль <code>DhcpServer</code> —
+            обычно сам сервер DHCP. Пусто — берётся контроллер домена сверху.
+          </div>
+        </div>
+        <div class="field">
+          {{ dhcp_form.port.label(class="label") }}
+          {{ dhcp_form.port(placeholder=default_dhcp_port) }}
+          <div class="help">5985 — обычный WinRM, 5986 — с шифрованием.</div>
+        </div>
+      </div>
+
+      <div class="check">
+        {{ dhcp_form.use_ssl() }}
+        {{ dhcp_form.use_ssl.label() }}
+      </div>
+
+      <div class="row">
+        <div class="field">
+          {{ dhcp_form.username.label(class="label") }}
+          {{ dhcp_form.username(placeholder="как у Active Directory", autocomplete="off") }}
+          <div class="help">Пусто — используется учётная запись из блока выше.</div>
+        </div>
+        <div class="field">
+          {{ dhcp_form.password.label(class="label") }}
+          {{ dhcp_form.password(autocomplete="new-password") }}
+          <div class="help">
+            {% if dhcp_password_set %}Пароль сохранён. Оставьте пустым, чтобы не менять.
+            {% else %}Пусто — берётся пароль из блока Active Directory.{% endif %}
+          </div>
+        </div>
+        <div class="field">
+          {{ dhcp_form.timeout.label(class="label") }}
+          {{ dhcp_form.timeout() }}
+          <div class="help">Область на тысячу аренд читается небыстро.</div>
+        </div>
+      </div>
+
+      <div class="field">
+        {{ dhcp_form.servers.label(class="label") }}
+        {{ dhcp_form.servers(rows=4, placeholder="dhcp1.adm72.local\ndhcp2.adm72.local") }}
+        <div class="help">
+          По одному серверу в строке. Пусто — список берётся из домена командой
+          <code>Get-DhcpServerInDC</code>, и это предпочтительный вариант:
+          он всегда актуален.
+        </div>
+      </div>
+    </div>
+    <div class="card__footer">
+      <button name="submit_dhcp" value="1" class="btn btn--primary">
+        {{ ico.icon('check') }} Сохранить</button>
+      <button name="test_dhcp" value="1" class="btn">
+        {{ ico.icon('play') }} Проверить связь</button>
+    </div>
+  </div>
+</form>
+{% endblock %}

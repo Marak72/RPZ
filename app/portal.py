@@ -6,7 +6,9 @@
   * ``fstec``  (``/fstec/``)  — блокировка доменов из писем ФСТЭК через RPZ BIND;
   * ``skydns`` (``/skydns/``) — угрозы из статистики SkyDNS и поиск конечных
     хостов в MaxPatrol SIEM;
-  * ``tasks``  (``/tasks/``)  — задачи отдела: доска, карточки, комментарии.
+  * ``tasks``  (``/tasks/``)  — задачи отдела: доска, карточки, комментарии;
+  * ``assets`` (``/assets/``) — что за узел стоит за IP-адресом: аренды DHCP
+    и объекты компьютеров из Active Directory.
 
 В корне портала (``/``) — главная страница со списком сервисов, blueprint
 ``hub``. Снаружи всё это отдаётся на подпути ``/soc/``, то есть сервисы
@@ -59,6 +61,15 @@ SERVICES: tuple[Service, ...] = (
         endpoint="skydns.dashboard",
         blueprint="skydns",
         nav_template="skydns/nav.html",
+    ),
+    Service(
+        id="assets",
+        title="Узлы сети",
+        subtitle="чей это адрес",
+        icon="server",
+        endpoint="assets.dashboard",
+        blueprint="assets",
+        nav_template="assets/nav.html",
     ),
 )
 

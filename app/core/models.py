@@ -32,6 +32,8 @@ JOB_ACTIVE_STATUSES = (JOB_QUEUED, JOB_RUNNING)
 # Виды фоновых заданий.
 JOB_KIND_SIEM = "siem_lookup"
 JOB_KIND_SKYDNS = "skydns_sync"
+JOB_KIND_ASSETS_DHCP = "assets_dhcp_sync"
+JOB_KIND_ASSETS_AD = "assets_ad_sync"
 
 
 @login_manager.user_loader

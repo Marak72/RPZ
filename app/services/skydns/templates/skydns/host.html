@@ -10,6 +10,13 @@
     <p>Вредоносных доменов: {{ rows|length }} · событий в SIEM: {{ total_events }}</p>
   </div>
   <div class="btn-group">
+    {# Ссылка в соседний сервис: SIEM отдаёт голый адрес, а чей он — знают
+       аренды DHCP и Active Directory. #}
+    {% if current_user.can_use('assets') %}
+    <a class="btn btn--primary" href="{{ url_for('assets.host_view', ip=address) }}">
+      {{ ico.icon('server') }} Что это за узел
+    </a>
+    {% endif %}
     <a class="btn" href="{{ url_for('skydns.hosts') }}">{{ ico.icon('list') }} Ко всем хостам</a>
   </div>
 </div>

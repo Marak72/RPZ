@@ -81,6 +81,8 @@ def _configure_sqlite(app: Flask) -> None:
 
     @event.listens_for(Engine, "connect")
     def _set_pragmas(dbapi_connection, _record):  # pragma: no cover - драйвер
+        _register_unicode_lower(dbapi_connection, app)
+
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA journal_mode=WAL")
@@ -106,6 +108,37 @@ def _configure_sqlite(app: Flask) -> None:
                 "Страницы портала будут падать с «database is locked» во "
                 "время фоновых выгрузок.", mode,
             )
+
+
+def _register_unicode_lower(dbapi_connection, app: Flask) -> None:
+    """Научить SQLite приводить кириллицу к нижнему регистру.
+
+    Встроенная функция ``lower()`` в SQLite работает только с латиницей:
+    ``lower('Бухгалтерия')`` возвращает строку без изменений. А поиск без учёта
+    регистра (``ilike`` в SQLAlchemy) разворачивается именно в ``lower(поле)
+    LIKE lower(образец)`` — и по русскому тексту молча не находит ничего:
+    «бухгалтерия» не совпадает с «Бухгалтерия». Портал русскоязычный целиком,
+    поэтому подменяем ``lower`` на питоновский, знающий Unicode.
+
+    Подмена встроенной функции безопасна: для латиницы поведение то же самое,
+    меняется только обработка нелатинских букв.
+    """
+    def _lower(value):
+        return value.lower() if isinstance(value, str) else value
+
+    try:
+        dbapi_connection.create_function("lower", 1, _lower, deterministic=True)
+    except TypeError:
+        # deterministic появился в Python 3.8 и требует SQLite 3.8.3+.
+        try:
+            dbapi_connection.create_function("lower", 1, _lower)
+        except Exception:  # noqa: BLE001 — драйвер может быть не sqlite3
+            return
+    except Exception:  # noqa: BLE001 — драйвер может быть не sqlite3
+        app.logger.warning(
+            "Не удалось заменить SQLite lower() на Unicode-версию: поиск по "
+            "русскому тексту будет чувствителен к регистру."
+        )
 
 
 def _register_template_helpers(app: Flask) -> None:

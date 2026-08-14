@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Выгрузка{% endblock %}
+{% block subheading %}<div class="topbar__sub">Наполнение базы узлов</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Выгрузка данных</h2>
+    <p>Обе выгрузки читают внешние системы и ничего в них не меняют.
+       Идут в фоне — страницу можно закрыть.</p>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('server') }}<span class="card__title">Аренды DHCP</span>
+      {% if dhcp_configured %}
+      <span class="badge badge--success" style="margin-left:auto">настроено</span>
+      {% else %}
+      <span class="badge badge--danger" style="margin-left:auto">не настроено</span>
+      {% endif %}
+    </div>
+    <div class="card__body">
+      <p class="text-sm muted">
+        Портал получает список серверов DHCP из домена, обходит их области и
+        забирает аренды. Это единственный источник связки «адрес → имя → MAC»:
+        обратных записей DNS у рабочих станций в домене нет.
+      </p>
+      {% if servers %}
+      <div class="help">
+        Опрашиваются только указанные в настройках серверы:
+        {% for s in servers %}<code>{{ s }}</code>{{ ", " if not loop.last }}{% endfor %}
+      </div>
+      {% else %}
+      <div class="help">Опрашиваются все серверы, авторизованные в домене.</div>
+      {% endif %}
+      {% if scopes_count %}
+      <div class="help">Известно областей: <strong>{{ scopes_count }}</strong>.</div>
+      {% endif %}
+    </div>
+    <div class="card__footer">
+      <form method="post">
+        {{ form.hidden_tag() }}
+        <button name="submit_dhcp" value="1" class="btn btn--primary"
+                {% if not dhcp_configured %}disabled{% endif %}>
+          {{ ico.icon('download') }} Выгрузить аренды DHCP
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('users') }}<span class="card__title">Компьютеры Active Directory</span>
+      {% if ad_configured %}
+      <span class="badge badge--success" style="margin-left:auto">настроено</span>
+      {% else %}
+      <span class="badge badge--danger" style="margin-left:auto">не настроено</span>
+      {% endif %}
+    </div>
+    <div class="card__body">
+      <p class="text-sm muted">
+        Постраничный обход каталога: имя, подразделение, описание,
+        операционная система, дата последнего входа. После выгрузки адреса
+        связываются с объектами по имени.
+      </p>
+      <div class="help">
+        Запрос идёт в глобальный каталог, поэтому находятся машины всех
+        площадок, а не только своего сайта.
+      </div>
+    </div>
+    <div class="card__footer">
+      <form method="post">
+        {{ form.hidden_tag() }}
+        <button name="submit_ad" value="1" class="btn btn--primary"
+                {% if not ad_configured %}disabled{% endif %}>
+          {{ ico.icon('download') }} Выгрузить компьютеры AD
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% if not (dhcp_configured and ad_configured) %}
+<div class="alert alert--warning">
+  {{ ico.icon('alert') }}
+  <div class="alert__text">
+    Подключения заполняются в настройках сервиса. Учётной записи достаточно
+    прав только на чтение: просмотр каталога и членство в группе
+    <code>DHCP Users</code>.
+  </div>
+  <a class="btn btn--sm" href="{{ url_for('assets.settings') }}">Настроить</a>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card__header">
+    {{ ico.icon('list') }}<span class="card__title">Последние выгрузки</span>
+    <a class="btn btn--ghost btn--sm" style="margin-left:auto"
+       href="{{ url_for('assets.logs') }}">Весь журнал</a>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Когда</th><th>Источник</th><th>Итог</th><th class="num">Получено</th>
+            <th>Длительность</th><th>Сообщение</th></tr>
+      </thead>
+      <tbody>
+        {% for row in recent %}
+        <tr>
+          <td class="muted nowrap text-xs">{{ row.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>{{ 'DHCP' if row.source == 'dhcp' else 'Active Directory' }}</td>
+          <td>
+            <span class="badge {{ 'badge--success' if row.ok else 'badge--danger' }}">
+              {{ 'успешно' if row.ok else 'ошибка' }}</span>
+          </td>
+          <td class="num">{{ row.received }}</td>
+          <td class="muted text-xs nowrap">{{ row.duration or '—' }}</td>
+          <td class="text-xs">{{ row.message }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="muted">Выгрузок ещё не было.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

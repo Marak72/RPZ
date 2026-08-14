@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Журнал{% endblock %}
+{% block subheading %}<div class="topbar__sub">Обращения и выгрузки</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Журнал</h2>
+    <p>Кто какой адрес смотрел и что тогда нашлось. Полезно при разборе:
+       часто оказывается, что этот адрес уже проверяли неделю назад.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__header">
+    {{ ico.icon('refresh') }}<span class="card__title">Выгрузки</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Когда</th><th>Источник</th><th>Итог</th><th class="num">Получено</th>
+            <th class="num">Новых</th><th>Длительность</th><th>Сообщение</th></tr>
+      </thead>
+      <tbody>
+        {% for row in syncs %}
+        <tr>
+          <td class="muted nowrap text-xs">{{ row.started_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td>{{ 'DHCP' if row.source == 'dhcp' else 'Active Directory' }}</td>
+          <td>
+            <span class="badge {{ 'badge--success' if row.ok else 'badge--danger' }}">
+              {{ 'успешно' if row.ok else 'ошибка' }}</span>
+          </td>
+          <td class="num">{{ row.received }}</td>
+          <td class="num">{{ row.created }}</td>
+          <td class="muted text-xs nowrap">{{ row.duration or '—' }}</td>
+          <td class="text-xs">{{ row.message }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="muted">Выгрузок ещё не было.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card__header">
+    {{ ico.icon('search') }}<span class="card__title">Обращения</span>
+  </div>
+  <div class="table-wrap">
+    <table class="table">
+      <thead>
+        <tr><th>Когда</th><th>Запрос</th><th>Тип</th><th>Кто</th><th>Результат</th></tr>
+      </thead>
+      <tbody>
+        {% for row in items %}
+        <tr>
+          <td class="muted nowrap text-xs">{{ row.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
+          <td class="value">
+            {% if row.host %}
+              <a href="{{ url_for('assets.host_view', ip=row.host.ip) }}">{{ row.term }}</a>
+            {% else %}
+              <a href="{{ url_for('assets.search', q=row.term) }}">{{ row.term }}</a>
+            {% endif %}
+            {% if row.is_live %}<span class="badge badge--info">живой запрос</span>{% endif %}
+          </td>
+          <td class="text-xs muted">
+            {% if row.query_kind == 'ip' %}адрес
+            {% elif row.query_kind == 'mac' %}MAC
+            {% elif row.query_kind == 'hostname' %}имя
+            {% else %}текст{% endif %}
+          </td>
+          <td class="text-xs">{{ row.user.display_name if row.user else '—' }}</td>
+          <td class="text-xs">
+            {% if row.error %}
+              <span class="badge badge--danger">ошибка</span> {{ row.error }}
+            {% elif row.found %}
+              {{ row.result }}
+            {% else %}
+              <span class="muted">не найдено</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="5">
+            <div class="empty">
+              {{ ico.icon('list') }}
+              <div class="empty__title">Обращений пока не было</div>
+              <div class="empty__text">Журнал заполняется по мере работы с поиском.</div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

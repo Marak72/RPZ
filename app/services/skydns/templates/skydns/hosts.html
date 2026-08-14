@@ -37,7 +37,7 @@
       <thead>
         <tr>
           <th>Адрес</th><th class="num">Вредоносных доменов</th>
-          <th class="num">Событий</th><th>Последняя проверка</th>
+          <th class="num">Событий</th><th>Последняя проверка</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -57,10 +57,19 @@
           <td class="muted nowrap text-xs">
             {{ row.last_found.strftime('%d.%m.%Y %H:%M') if row.last_found else '—' }}
           </td>
+          <td class="nowrap">
+            {# Кто стоит за адресом — знает соседний сервис «Узлы сети». #}
+            {% if current_user.can_use('assets') %}
+            <a class="btn btn--ghost btn--sm" href="{{ url_for('assets.host_view', ip=row.address) }}"
+               title="Что это за узел: имя, подразделение, MAC">
+              {{ ico.icon('server', 'icon icon-sm') }} Что это
+            </a>
+            {% endif %}
+          </td>
         </tr>
         {% else %}
         <tr data-empty>
-          <td colspan="4">
+          <td colspan="5">
             <div class="empty">
               {{ ico.icon('server') }}
               <div class="empty__title">Хостов пока нет</div>

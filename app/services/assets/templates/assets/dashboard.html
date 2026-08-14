@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Узлы сети{% endblock %}
+{% block subheading %}<div class="topbar__sub">Чей это адрес</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Узлы сети</h2>
+    <p>Введите адрес, имя машины или MAC — и увидите, что это за узел, где он
+       стоит и к какому подразделению относится. Данные берутся из аренд DHCP
+       и из Active Directory.</p>
+  </div>
+  {% if current_user.is_operator %}
+  <div class="btn-group">
+    <a class="btn btn--primary" href="{{ url_for('assets.sync') }}">
+      {{ ico.icon('download') }} Выгрузить данные
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+{# Главное действие сервиса стоит первым: чаще всего сюда заходят с готовым
+   адресом в буфере обмена, и лишний переход по разделам только мешает. #}
+<div class="card">
+  <div class="card__body">
+    <form method="get" action="{{ url_for('assets.search') }}">
+      <div class="row">
+        <div class="field" style="flex:3">
+          <label class="label" for="q">Адрес, имя узла или MAC</label>
+          <input id="q" type="search" name="q" placeholder="10.10.24.11, pc-ivanov или 00:1a:2b:3c:4d:5e"
+                 data-search-focus autofocus>
+          <div class="help">
+            Поиск идёт по собственной базе портала. Если адрес нужно проверить
+            прямо сейчас — на его карточке есть кнопка живого запроса в DHCP и AD.
+          </div>
+        </div>
+        <div class="field" style="flex:0 0 auto; align-self:flex-start; margin-top:1.6rem">
+          <button class="btn btn--primary">{{ ico.icon('search') }} Найти</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if current_user.is_operator and not (ad_configured and dhcp_configured) %}
+<div class="alert alert--warning">
+  {{ ico.icon('alert') }}
+  <div class="alert__text">
+    {% if not dhcp_configured and not ad_configured %}
+      Не настроены ни DHCP, ни Active Directory — базу узлов пока нечем наполнять.
+    {% elif not dhcp_configured %}
+      Не настроен DHCP. Без него неоткуда взять связку «адрес → имя → MAC»:
+      обратных записей DNS у рабочих станций в домене нет.
+    {% else %}
+      Не настроена Active Directory — имя узла будет известно, а подразделение,
+      описание и операционная система нет.
+    {% endif %}
+  </div>
+  <a class="btn btn--sm" href="{{ url_for('assets.settings') }}">Настроить</a>
+</div>
+{% endif %}
+
+<div class="grid grid--stats" style="margin-bottom:1rem">
+  <a class="stat stat--primary" href="{{ url_for('assets.hosts') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('server') }}</span>
+      <span class="stat__label">Адресов в базе</span>
+    </div>
+    <div class="stat__value">{{ counts.hosts }}</div>
+    <div class="stat__hint">из аренд DHCP</div>
+  </a>
+  <a class="stat stat--info" href="{{ url_for('assets.computers') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('users') }}</span>
+      <span class="stat__label">Компьютеров AD</span>
+    </div>
+    <div class="stat__value">{{ counts.computers }}</div>
+    <div class="stat__hint">объектов каталога</div>
+  </a>
+  <a class="stat" href="{{ url_for('assets.scopes') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('hash') }}</span>
+      <span class="stat__label">Областей DHCP</span>
+    </div>
+    <div class="stat__value">{{ counts.scopes }}</div>
+    <div class="stat__hint">карта «адрес → сервер»</div>
+  </a>
+  <a class="stat {{ 'stat--warning' if counts.unlinked else 'stat--success' }}"
+     href="{{ url_for('assets.hosts', unlinked='1') }}">
+    <div class="stat__top">
+      <span class="stat__icon">{{ ico.icon('link') }}</span>
+      <span class="stat__label">Без объекта AD</span>
+    </div>
+    <div class="stat__value">{{ counts.unlinked }}</div>
+    <div class="stat__hint">сетевое оборудование и гости</div>
+  </a>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('hash') }}<span class="card__title">Что стоит в сети</span>
+    </div>
+    <div class="card__body">
+      {% if kinds %}
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            {% for row in kinds %}
+            <tr>
+              <td><span class="badge {{ row.badge }}">{{ row.title }}</span></td>
+              <td class="num">
+                <a href="{{ url_for('assets.hosts', kind=row.kind) }}">{{ row.count }}</a>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="help">
+        Вид узла определяется по операционной системе из AD, а если объекта в
+        каталоге нет — по принятым приставкам в имени. За сетевым узлом
+        сотрудника искать бесполезно: там его нет.
+      </div>
+      {% else %}
+      <div class="empty">
+        {{ ico.icon('server') }}
+        <div class="empty__title">База пуста</div>
+        <div class="empty__text">Запустите выгрузку — адреса появятся здесь.</div>
+        {% if current_user.is_operator %}
+        <a class="btn btn--sm" href="{{ url_for('assets.sync') }}">К выгрузке</a>
+        {% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('refresh') }}<span class="card__title">Состояние данных</span>
+    </div>
+    <div class="card__body">
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            <tr>
+              <td>Аренды DHCP</td>
+              <td>
+                {% if last_dhcp %}
+                  <span class="badge {{ 'badge--success' if last_dhcp.ok else 'badge--danger' }}">
+                    {{ 'успешно' if last_dhcp.ok else 'с ошибками' }}</span>
+                  <span class="muted text-xs">{{ last_dhcp.started_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                {% else %}
+                  <span class="muted">не выгружались</span>
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <td>Компьютеры AD</td>
+              <td>
+                {% if last_ad %}
+                  <span class="badge {{ 'badge--success' if last_ad.ok else 'badge--danger' }}">
+                    {{ 'успешно' if last_ad.ok else 'с ошибками' }}</span>
+                  <span class="muted text-xs">{{ last_ad.started_at.strftime('%d.%m.%Y %H:%M') }}</span>
+                {% else %}
+                  <span class="muted">не выгружались</span>
+                {% endif %}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {% if last_dhcp and last_dhcp.message %}
+      <div class="help">{{ last_dhcp.message }}</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="grid grid--2">
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('search') }}<span class="card__title">Последние обращения</span>
+      <a class="btn btn--ghost btn--sm" style="margin-left:auto"
+         href="{{ url_for('assets.logs') }}">Весь журнал</a>
+    </div>
+    <div class="card__body">
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            {% for row in recent_lookups %}
+            <tr>
+              <td class="value">
+                <a href="{{ url_for('assets.search', q=row.term) }}">{{ row.term }}</a>
+                {% if row.is_live %}<span class="badge badge--info">живой запрос</span>{% endif %}
+              </td>
+              <td class="muted text-xs">{{ row.result or ('не найдено' if not row.found else '') }}</td>
+              <td class="muted nowrap text-xs">{{ row.created_at.strftime('%d.%m %H:%M') }}</td>
+            </tr>
+            {% else %}
+            <tr><td class="muted">Обращений пока не было.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card__header">
+      {{ ico.icon('clock') }}<span class="card__title">Что менялось</span>
+    </div>
+    <div class="card__body">
+      <div class="table-wrap">
+        <table class="table">
+          <tbody>
+            {% for row in recent_changes %}
+            <tr>
+              <td class="value">
+                <a href="{{ url_for('assets.host_view', ip=row.host.ip) }}">{{ row.host.ip }}</a>
+              </td>
+              <td class="text-xs">{{ row.change }}</td>
+              <td class="muted nowrap text-xs">{{ row.seen_at.strftime('%d.%m %H:%M') }}</td>
+            </tr>
+            {% else %}
+            <tr><td class="muted">Изменений пока не было.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="help">
+        История ведётся, потому что аренда меняется: ответ «чей это адрес
+        сейчас» и «чей был в момент инцидента» — разные ответы.
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
