@@ -157,10 +157,33 @@ sudo nginx -t && sudo systemctl reload nginx
 cd /opt/fstec-rpz && git pull && . venv/bin/activate
 pip install -r requirements.txt
 # Резервная копия базы — миграции лучше катать с возможностью откатиться.
-cp instance/rpz.db "instance/rpz.db.$(date +%F-%H%M).bak"
+# Именно .backup(), а не cp: база работает в режиме WAL, и часть данных лежит
+# в файле -wal. Обычное копирование сняло бы её без несброшенного журнала,
+# то есть неполной — а узнать об этом пришлось бы уже при восстановлении.
+python3 -c "import sqlite3,datetime; s=sqlite3.connect('file:instance/rpz.db?mode=ro',uri=True); d=sqlite3.connect('instance/rpz.db.%s.bak' % datetime.datetime.now().strftime('%F-%H%M')); s.backup(d); d.close(); s.close(); print('копия готова')"
 set -a && . ./.env && set +a && export FLASK_APP=run.py && flask db upgrade
 sudo systemctl restart soc-portal
 ```
+
+Проверить копию перед миграцией (должно ответить `ok`, а число записей —
+совпасть с боевой базой):
+
+```bash
+sqlite3 instance/rpz.db.<метка>.bak "PRAGMA integrity_check; SELECT COUNT(*) FROM block_entries;"
+```
+
+`sqlite3` в системе может отсутствовать (на socelkserver его нет) — тогда
+тем же `venv/bin/python3` через модуль `sqlite3`.
+
+Если выпуск приносит новые необязательные зависимости, поставьте и их:
+
+```bash
+pip install -r requirements-optional.txt
+```
+
+Сейчас там `pypdf` (разбор писем ФСТЭК в PDF), а также `ldap3` и `pywinrm` —
+без них поднимется всё, кроме сервиса «Узлы сети»: он честно сообщит, что
+библиотека не установлена. Обе — чистый Python, компилятор не нужен.
 
 Если обновление приносит новые таймауты или параметры запуска (как выпуск с
 сервисом «Угрозы SkyDNS»), обновите и конфиги:
