@@ -13,7 +13,9 @@ example[.]com, hxxp[:]//..., 5[.]252[.]153[.]67. Имена вложений, н
   domain  — домен, пригоден для блокировки в RPZ
   ip      — IPv4-адрес (блокируется на межсетевом экране, не в RPZ)
   url     — ссылка С ПУТЁМ; в RPZ блокировать путь нельзя, поэтому такие
-            индикаторы выделяются отдельно (хост при этом попадает в domain)
+            индикаторы выделяются отдельно. Хост из такой ссылки доменом НЕ
+            становится: вредоносна страница, а не сайт целиком (github.com,
+            telegram.me и подобные), а RPZ закрывает имя целиком
   sha256 / sha1 / md5 — хеши-индикаторы для систем мониторинга
 
 Функции работают со строкой текста, поэтому их легко тестировать без файлов.
@@ -151,10 +153,7 @@ def _parse_url(seg: str):
 
 
 def _classify_segment(seg: str) -> list[ExtractedEntry]:
-    """Классифицировать сегмент, если он ЦЕЛИКОМ является индикатором.
-
-    Возвращает список: для URL с путём — сама ссылка И её хост.
-    """
+    """Классифицировать сегмент, если он ЦЕЛИКОМ является индикатором."""
     if not seg:
         return []
 
@@ -167,14 +166,25 @@ def _classify_segment(seg: str) -> list[ExtractedEntry]:
         if not parsed:
             return []
         host, has_path, normalized = parsed
-        out: list[ExtractedEntry] = []
+
         if has_path:
-            out.append(
-                ExtractedEntry(value=normalized, entry_type="url", host=host)
-            )
-        if host not in _ALLOWLIST:
-            out.append(ExtractedEntry(value=host, entry_type="domain"))
-        return out
+            # Только сама ссылка — хост кандидатом на блокировку НЕ становится.
+            #
+            # Вредоносной в такой строке является страница, а не сайт целиком:
+            # в письмах ФСТЭК регулярно встречаются github.com/<аккаунт>/…,
+            # telegram.me/<канал>, диски и файлопомойки. RPZ блокирует имя
+            # целиком, поэтому выгрузка такого хоста закрыла бы отделу весь
+            # легитимный сервис.
+            #
+            # Если домен и правда вредоносен целиком, в письме он приводится
+            # отдельной строкой (как voffice.help) — и тогда попадёт в домены
+            # оттуда. Либо аналитик добавит его вручную, увидев хост в разделе
+            # «URL с путями».
+            return [ExtractedEntry(value=normalized, entry_type="url", host=host)]
+
+        if host in _ALLOWLIST:
+            return []
+        return [ExtractedEntry(value=host, entry_type="domain")]
 
     # IPv4 целиком.
     if _IPV4_RE.fullmatch(seg):

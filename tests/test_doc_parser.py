@@ -31,13 +31,35 @@ def test_reference_domain_fstec_excluded():
     assert "fstec.ru" not in {e.value for e in res}
 
 
-def test_url_host_only_no_path_fragments():
+def test_url_path_does_not_leak_into_domains():
     res = doc_parser.extract(LETTER)
     domains = _vals(res, "domain")
-    assert "github.com" in domains
-    assert "voffice.help" in domains
     # путь из URL не должен попасть как домен
     assert "driver.jpg" not in domains
+    assert "yulyaigonina" not in domains
+
+
+def test_host_of_a_url_with_path_is_not_blocked():
+    """Хост ссылки с путём — не кандидат на блокировку.
+
+    В письме встречаются github.com/<аккаунт> и telegram.me/<канал>: вредоносна
+    страница, а не сервис целиком. RPZ блокирует имя целиком, поэтому выгрузка
+    такого хоста закрыла бы отделу легитимный ресурс.
+    """
+    domains = _vals(doc_parser.extract(LETTER), "domain")
+    assert "github.com" not in domains
+    assert "telegram.me" not in domains
+
+
+def test_domain_listed_separately_is_still_blocked():
+    """Правило выше не должно спасать по-настоящему вредоносные домены.
+
+    voffice.help приведён в письме и отдельной строкой, и внутри ссылок —
+    в блокировку он обязан попасть.
+    """
+    res = doc_parser.extract(LETTER)
+    assert "voffice.help" in _vals(res, "domain")
+    assert "http://voffice.help/driver.jpg" in _vals(res, "url")
 
 
 def test_urls_with_paths_are_separate_category():
@@ -45,15 +67,22 @@ def test_urls_with_paths_are_separate_category():
     urls = _vals(res, "url")
     assert "http://voffice.help/driver.jpg" in urls
     assert "https://telegram.me/hgo9tx" in urls
-    # у URL сохраняется хост
+    # у URL сохраняется хост — по нему аналитик решает, блокировать ли домен
     entry = next(e for e in res if e.value == "http://voffice.help/driver.jpg")
     assert entry.host == "voffice.help"
 
 
 def test_url_without_path_is_domain_only():
+    """Ссылка без пути — это про домен целиком, его и блокируем."""
     res = doc_parser.extract("hxxps[:]//lorebird[.]com;\n")
     assert _vals(res, "url") == set()
     assert "lorebird.com" in _vals(res, "domain")
+
+
+def test_bare_url_with_only_trailing_slash_still_blocks_the_domain():
+    res = doc_parser.extract("hxxp[:]//evil-shop[.]ru/;\n")
+    assert "evil-shop.ru" in _vals(res, "domain")
+    assert _vals(res, "url") == set()
 
 
 def test_is_valid_domain_rejects_file_names():
