@@ -1,7 +1,16 @@
 from datetime import datetime
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from flask_login import current_user, login_required, login_user, logout_user
+from sqlalchemy.exc import SQLAlchemyError
 
 from ..core.extensions import db
 from ..core.models import User
@@ -25,8 +34,21 @@ def login():
                 )
                 return render_template("login.html", form=form)
             login_user(user)
-            user.last_login_at = datetime.utcnow()
-            db.session.commit()
+            # Отметка о входе — сведение для журнала, а не часть входа.
+            # Пользователь уже опознан, сессия уже выдана; если база в этот
+            # момент занята (идёт ночная выгрузка, SQLite пускает одного
+            # писателя), падать нельзя — иначе человек получает 500 на
+            # странице входа, хотя вошёл успешно. Так и случилось 24.08:
+            # запись ждала блокировку 30 секунд и не дождалась.
+            try:
+                user.last_login_at = datetime.utcnow()
+                db.session.commit()
+            except SQLAlchemyError:
+                db.session.rollback()
+                current_app.logger.warning(
+                    "Не удалось записать время входа для %s: база занята. "
+                    "Вход при этом выполнен.", user.username,
+                )
             next_page = request.args.get("next")
             return redirect(next_page or url_for("hub.index"))
         flash("Неверный логин или пароль.", "danger")

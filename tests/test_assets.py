@@ -17,12 +17,16 @@ from app.portal import SERVICES  # noqa: E402
 from app.services.assets import routes as assets_routes  # noqa: E402
 from app.services.assets.lib import classify, inventory  # noqa: E402
 from app.services.assets.lib.dhcp_client import (  # noqa: E402
+    ALLOWED_CMDLETS,
+    CODEPAGE_UTF8,
     DhcpError,
     DhcpLease,
     DhcpScopeInfo,
     _guard,
     _parse_ps_datetime,
     _rows,
+    build_script,
+    decode_payload,
     leases_from_rows,
     scopes_from_rows,
     servers_from_rows,
@@ -219,12 +223,27 @@ def test_scopes_and_servers_parsed():
 
 
 def test_only_read_commands_reach_the_server():
-    """Защита от записи: до DHCP-сервера уходят только Get-*."""
+    """Защита от записи: уходят только команды из списка разрешённых."""
     with pytest.raises(DhcpError) as exc:
         _guard("Remove-DhcpServerv4Lease -IPAddress 10.0.0.1")
-    assert "не являющуюся чтением" in str(exc.value)
-    # А обычный запрос чтения проходит.
-    _guard("$ErrorActionPreference='Stop'\nGet-DhcpServerv4Lease -ScopeId '1.1.1.0'")
+    assert "Remove-DhcpServerv4Lease" in str(exc.value)
+    # А настоящие сценарии сервиса проходят.
+    _guard(build_script("Get-DhcpServerv4Lease -ComputerName 'dc1' -ScopeId '1.1.1.0'"))
+    _guard(build_script("Get-DhcpServerInDC"))
+
+
+def test_write_hidden_in_an_assignment_is_still_caught():
+    """Прежняя построчная проверка это пропускала: строка начинается с «$»."""
+    with pytest.raises(DhcpError):
+        _guard("$x = Remove-Item C:\\data -Recurse")
+    with pytest.raises(DhcpError):
+        _guard("Get-DhcpServerv4Scope -ComputerName 'a' ; Stop-Service dhcp")
+
+
+def test_server_name_with_a_hyphen_is_not_mistaken_for_a_command():
+    """dc1-sovet61 — имя сервера, а не команда; иначе выгрузка бы не пошла."""
+    _guard(build_script(
+        "Get-DhcpServerv4Scope -ComputerName 'dc1-sovet61.adm72.local'"))
 
 
 def test_server_name_with_quotes_is_rejected():
@@ -605,3 +624,55 @@ def test_service_is_closed_without_a_grant(app):
     other = app.test_client()
     other.post("/login", data={"username": "nobody", "password": "pass"})
     assert other.get("/assets/").status_code == 403
+
+
+# --- кодировка ответа DHCP -------------------------------------------------
+
+def test_russian_scope_names_survive_the_transfer():
+    """Главная ошибка боевой выгрузки: русские названия приезжали как «?????».
+
+    pywinrm открывает оболочку с кодовой страницей 437 (американской), и
+    Windows приводит вывод к ней ДО отправки — кириллица заменяется знаками
+    вопроса на источнике, восстанавливать нечего. Поэтому ответ упаковывается
+    в base64: он состоит из латиницы и цифр и проходит любую кодовую страницу.
+    """
+    import base64 as b64
+
+    payload = ('[{"ScopeId":"10.61.12.0","Name":"Отдел кадров и о.к",'
+               '"SubnetMask":"255.255.255.0","State":"Active",'
+               '"StartRange":"10.61.12.10","EndRange":"10.61.12.200"}]')
+    wire = b64.b64encode(payload.encode("utf-8")).decode("ascii")
+
+    scopes = scopes_from_rows(_rows(decode_payload(wire)))
+    assert scopes[0].name == "Отдел кадров и о.к"
+    assert "?" not in scopes[0].name
+
+
+def test_utf8_codepage_is_requested():
+    assert CODEPAGE_UTF8 == 65001
+
+
+def test_script_asks_powershell_for_base64():
+    script = build_script("Get-DhcpServerInDC")
+    assert "ToBase64String" in script
+    assert "UTF8.GetBytes" in script
+
+
+def test_empty_answer_is_not_an_error():
+    """Команда без объектов печатает пустую строку — это «ничего не нашлось»."""
+    assert decode_payload("") == ""
+    assert _rows(decode_payload("")) == []
+
+
+def test_powershell_error_in_plain_text_is_shown_as_is():
+    """Если вместо base64 приехал текст ошибки, его надо показать, а не прятать."""
+    with pytest.raises(DhcpError) as exc:
+        decode_payload("Get-DhcpServerv4Scope : Failed to get version")
+    assert "Failed to get version" in str(exc.value)
+
+
+def test_allowed_cmdlets_are_all_reads():
+    """Ни одной команды изменения в списке разрешённых."""
+    for name in ALLOWED_CMDLETS:
+        verb = name.split("-", 1)[0]
+        assert verb in ("Get", "Import", "ConvertTo", "Select"), name

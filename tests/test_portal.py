@@ -197,3 +197,46 @@ def test_quick_add_returns_under_the_prefix(proxied_client):
         "priority": "normal", "back": "/soc/tasks/", "submit_quick": "1",
     }, headers=PREFIX_HEADERS)
     assert response.headers["Location"].endswith("/soc/tasks/")
+
+
+@pytest.fixture
+def stranger():
+    """Клиент без входа.
+
+    Обязательно своё приложение: клиент, взятый у вошедшей фикстуры через
+    ``client.application.test_client()``, наследует её сессию и приходит на
+    страницу уже авторизованным. На таком «постороннем» проверка анонимного
+    случая молча проходила бы и без исправления.
+    """
+    application = create_app(TestConfig)
+    with application.app_context():
+        db.create_all()
+        yield application.test_client()
+
+
+def test_unknown_url_gives_404_not_500_to_a_stranger(stranger):
+    """Страница ошибки наследует общую вёрстку и видна не вошедшему.
+
+    У анонимного посетителя ``current_user`` — это ``AnonymousUserMixin``, без
+    ``display_name``. Обращение к нему в шапке роняло отрисовку самой страницы
+    ошибки, и портал отдавал 500 вместо честного 404 — на любой опечатке в
+    адресе, во всех сервисах сразу.
+    """
+    for url in ("/net-takogo", "/fstec/net-takogo", "/skydns/net-takogo",
+                "/tasks/net-takogo", "/assets/net-takogo"):
+        response = stranger.get(url)
+        assert response.status_code == 404, url
+        assert "Страница не найдена" in response.get_data(as_text=True)
+
+
+def test_error_page_is_really_rendered_anonymously(stranger):
+    """Страж самой проверки: если клиент вдруг окажется вошедшим, тест выше
+    перестанет проверять то, ради чего написан."""
+    body = stranger.get("/net-takogo").get_data(as_text=True)
+    assert "Войти" in body
+    assert "user-chip" not in body
+
+
+def test_unknown_url_still_404_for_a_logged_in_user(client):
+    response = client.get("/fstec/net-takogo")
+    assert response.status_code == 404

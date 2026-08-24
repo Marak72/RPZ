@@ -2,12 +2,22 @@
 
 Почему именно так. У службы DHCP от Microsoft нет ни LDAP-интерфейса, ни
 HTTP-API: единственный поддерживаемый способ получить аренды — модуль
-PowerShell ``DhcpServer``. Поэтому портал открывает сессию WinRM к самому
-DHCP-серверу и выполняет там команды чтения.
+PowerShell ``DhcpServer``. Поэтому портал открывает сессию WinRM и выполняет
+там команды чтения.
 
-Только чтение. Здесь выполняются исключительно команды ``Get-*``; список
-разрешённых глаголов проверяется перед отправкой (см. :func:`_guard`). Даже
-если в шаблон запроса когда-нибудь попадёт лишнее, до сервера оно не дойдёт.
+Только чтение. До сервера уходят исключительно команды из списка
+:data:`ALLOWED_CMDLETS`; всё остальное отбраковывается :func:`_guard` ещё до
+отправки. Проверяется весь текст сценария, а не начала строк, поэтому спрятать
+запись внутри присваивания (``$x = Remove-Item …``) не получится.
+
+Почему результат едет в base64. WinRM открывает оболочку с кодовой страницей,
+и pywinrm по умолчанию просит 437 — американскую, без кириллицы. Windows
+приводит вывод к ней **до отправки**, и русские названия областей DHCP
+приезжали как ``?????``: символы уничтожены на источнике, восстанавливать
+нечего. Мы и просим UTF-8 (65001), и дополнительно упаковываем ответ в base64
+— он состоит из латиницы и цифр, поэтому проходит через любую кодовую
+страницу без потерь. Одной настройки мало: кодовую страницу может урезать
+политика на стороне Windows, а base64 не зависит ни от чего.
 
 Зачем нужен обратный DNS, которого нет. В этом домене PTR-записи заведены
 только для серверов, у рабочих станций их нет — проверено на живых адресах.
@@ -16,6 +26,8 @@ DHCP-серверу и выполняет там команды чтения.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import re
 from dataclasses import dataclass
@@ -23,8 +35,24 @@ from datetime import datetime
 
 from .ipaddr import normalize_mac, parse_ip
 
-#: Разрешённые глаголы PowerShell. Всё остальное до сервера не уходит.
-_ALLOWED_VERBS = ("Get-", "Import-Module", "ConvertTo-Json", "Select-Object")
+#: Команды, которым разрешено уходить на сервер. Все — чтение.
+ALLOWED_CMDLETS = frozenset({
+    "Import-Module",
+    "ConvertTo-Json",
+    "Select-Object",
+    "Get-DhcpServerInDC",
+    "Get-DhcpServerv4Scope",
+    "Get-DhcpServerv4Lease",
+})
+
+#: UTF-8. Кодовая страница по умолчанию у pywinrm — 437, и кириллица в ней
+#: превращается в «?» ещё на стороне Windows.
+CODEPAGE_UTF8 = 65001
+
+#: Строки в одинарных кавычках вырезаются перед проверкой: внутри них лежат
+#: имена серверов вида ``dc1-sovet61``, и дефис в них — не команда.
+_QUOTED = re.compile(r"'[^']*'")
+_CMDLET = re.compile(r"\b[A-Za-z][A-Za-z0-9]*-[A-Za-z][A-Za-z0-9]*\b")
 
 #: Имя сервера: буквы, цифры, дефис, точка. Ничего, что могло бы вырваться
 #: из кавычек в PowerShell.
@@ -81,19 +109,21 @@ class DhcpLease:
 
 
 def _guard(script: str) -> None:
-    """Убедиться, что в сценарии нет ничего, кроме чтения."""
-    for line in script.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith("$"):
-            continue
-        if stripped.startswith("[Console]"):
-            continue
-        if not any(stripped.startswith(verb) for verb in _ALLOWED_VERBS):
-            raise DhcpError(
-                "Внутренняя ошибка: сервис пытается выполнить на DHCP-сервере "
-                "команду, не являющуюся чтением (%s). Запрос не отправлен."
-                % stripped.split()[0]
-            )
+    """Убедиться, что в сценарии нет ничего, кроме разрешённого чтения.
+
+    Проверяется весь текст, а не начала строк: команду записи можно спрятать
+    в присваивании, в конвейере или за точкой с запятой, и построчная проверка
+    её бы пропустила.
+    """
+    naked = _QUOTED.sub("''", script)
+    used = set(_CMDLET.findall(naked))
+    forbidden = sorted(used - ALLOWED_CMDLETS)
+    if forbidden:
+        raise DhcpError(
+            "Внутренняя ошибка: сервис пытается выполнить на DHCP-сервере "
+            "команду, которой нет в списке разрешённого чтения (%s). "
+            "Запрос не отправлен." % ", ".join(forbidden)
+        )
 
 
 def _safe_host(value: str) -> str:
@@ -137,22 +167,39 @@ def _parse_ps_datetime(value) -> datetime | None:
     return None
 
 
-def _rows(raw: str) -> list[dict]:
-    """Разобрать JSON от PowerShell в список словарей.
+def decode_payload(raw: str) -> str:
+    """Развернуть ответ сервера: base64 → UTF-8.
+
+    Если пришло не base64, значит PowerShell напечатал ошибку открытым
+    текстом — показываем её оператору, а не «неверный формат».
+    """
+    text = "".join((raw or "").split())
+    if not text:
+        return ""
+    try:
+        data = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise DhcpError(
+            "DHCP-сервер вернул не тот ответ, которого ждали. Обычно так "
+            "выглядит ошибка PowerShell: %s" % (raw or "")[:300]
+        ) from exc
+    return data.decode("utf-8", "replace")
+
+
+def _rows(payload: str) -> list[dict]:
+    """Разобрать JSON в список словарей.
 
     Пустой вывод — это не ошибка, а «ничего не нашлось»: команда, не вернувшая
     объектов, печатает пустую строку.
     """
-    text = (raw or "").strip()
-    if not text:
+    text = (payload or "").strip()
+    if not text or text == "null":
         return []
     try:
         data = json.loads(text)
     except ValueError as exc:
         raise DhcpError(
-            "DHCP-сервер вернул неразборчивый ответ. Обычно это значит, что "
-            "команда завершилась ошибкой раньше вывода. Начало ответа: %s"
-            % text[:300]
+            "DHCP-сервер вернул неразборчивый ответ. Начало: %s" % text[:300]
         ) from exc
     if isinstance(data, dict):
         return [data]
@@ -209,16 +256,6 @@ def servers_from_rows(rows: list[dict]) -> list[DhcpServer]:
 
 
 # --- сценарии PowerShell --------------------------------------------------
-#
-# ConvertTo-Json вызывается с -InputObject, а не через конвейер: конвейер
-# разворачивает массив из одного элемента, и ответ на «нашлась ровно одна
-# аренда» приезжал бы объектом вместо списка.
-
-_PREAMBLE = (
-    "$ErrorActionPreference='Stop'\n"
-    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8\n"
-    "Import-Module DhcpServer\n"
-)
 
 _SELECT_LEASE = (
     "Select-Object @{n='IPAddress';e={$_.IPAddress.IPAddressToString}},"
@@ -239,39 +276,71 @@ _SELECT_SCOPE = (
     "@{n='EndRange';e={$_.EndRange.IPAddressToString}}"
 )
 
+_SELECT_SERVER = (
+    "Select-Object DnsName,"
+    "@{n='IPAddress';e={$_.IPAddress.IPAddressToString}}"
+)
+
+
+def build_script(pipeline: str) -> str:
+    """Собрать сценарий чтения: результат уходит в base64.
+
+    ``ConvertTo-Json`` вызывается с ``-InputObject``, а не через конвейер:
+    конвейер разворачивает массив из одного элемента, и ответ на «нашлась
+    ровно одна аренда» приезжал бы объектом вместо списка.
+
+    Кавычки вокруг ``$json`` не лишние: если команда не вернула объектов,
+    ``ConvertTo-Json`` даёт ``$null``, а ``GetBytes($null)`` — отказ. Так
+    получается пустая строка, которую разбор понимает как «ничего нет».
+    """
+    return (
+        "$ErrorActionPreference='Stop'\n"
+        "Import-Module DhcpServer\n"
+        "$rows = @(%s)\n"
+        "$json = ConvertTo-Json -Compress -Depth 3 -InputObject $rows\n"
+        "$bytes = [Text.Encoding]::UTF8.GetBytes(\"$json\")\n"
+        "[Convert]::ToBase64String($bytes)\n" % pipeline
+    )
+
 
 class DhcpClient:
-    """Сессия WinRM к серверу, где есть модуль DhcpServer."""
+    """Сессия WinRM к серверу, где есть модуль DhcpServer.
+
+    Все команды выполняются на этом одном сервере; к чужим площадкам он
+    обращается сам, через ``-ComputerName``. Портал наружу больше никуда не
+    ходит.
+    """
 
     def __init__(self, config: DhcpConfig) -> None:
         self.config = config
-        self._session = None
+        self._proto = None
 
-    def _connect(self):
-        if self._session is not None:
-            return self._session
+    def _protocol(self):
+        if self._proto is not None:
+            return self._proto
         if not self.config.is_configured:
             raise DhcpError(
                 "Подключение к DHCP не настроено: укажите сервер, учётную "
                 "запись и пароль в настройках сервиса."
             )
-        winrm = _import_winrm()
+        protocol_module = _import_winrm()
         scheme = "https" if self.config.use_ssl else "http"
         endpoint = "%s://%s:%s/wsman" % (
             scheme, _safe_host(self.config.host), int(self.config.port)
         )
-        self._session = winrm.Session(
-            endpoint,
-            auth=(self.config.username, self.config.password),
+        self._proto = protocol_module.Protocol(
+            endpoint=endpoint,
             transport="ntlm",
+            username=self.config.username,
+            password=self.config.password,
             server_cert_validation="ignore",
             read_timeout_sec=self.config.timeout + 10,
             operation_timeout_sec=self.config.timeout,
         )
-        return self._session
+        return self._proto
 
     def close(self) -> None:
-        self._session = None
+        self._proto = None
 
     def __enter__(self) -> "DhcpClient":
         return self
@@ -280,52 +349,80 @@ class DhcpClient:
         self.close()
 
     def run(self, script: str) -> str:
-        """Выполнить сценарий чтения и вернуть его вывод."""
+        """Выполнить сценарий чтения и вернуть его вывод, уже раскодированный.
+
+        Оболочка открывается напрямую через ``Protocol``, а не через
+        ``Session``: у ``Session.run_ps`` кодовая страница зашита в умолчание
+        (437), и задать UTF-8 через него нельзя.
+        """
         _guard(script)
-        session = self._connect()
+        proto = self._protocol()
+        encoded = base64.b64encode(script.encode("utf_16_le")).decode("ascii")
+        command = ("powershell -NoProfile -NonInteractive -EncodedCommand %s"
+                   % encoded)
+
         try:
-            result = session.run_ps(script)
+            shell_id = proto.open_shell(codepage=CODEPAGE_UTF8)
         except Exception as exc:  # noqa: BLE001 — winrm бросает разное
             raise DhcpError(
-                "Не удалось выполнить запрос на %s: %s. Проверьте, что WinRM "
-                "включён и учётной записи разрешено подключение."
+                "Не удалось открыть сессию WinRM на %s: %s. Проверьте, что "
+                "WinRM включён и учётной записи разрешено подключение."
                 % (self.config.host, exc)
             ) from exc
-        if result.status_code != 0:
-            error = (result.std_err or b"").decode("utf-8", "replace").strip()
+
+        try:
+            command_id = proto.run_command(shell_id, command)
+            try:
+                std_out, std_err, status = proto.get_command_output(
+                    shell_id, command_id
+                )
+            finally:
+                proto.cleanup_command(shell_id, command_id)
+        except DhcpError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise DhcpError(
+                "Не удалось выполнить запрос на %s: %s"
+                % (self.config.host, exc)
+            ) from exc
+        finally:
+            try:
+                proto.close_shell(shell_id)
+            except Exception:  # noqa: BLE001 — оболочка закроется по таймауту
+                pass
+
+        if status != 0:
+            error = _text(std_err) or _text(std_out)
             raise DhcpError(
                 "DHCP-сервер отклонил запрос: %s"
-                % (_short_ps_error(error) or "код %s" % result.status_code)
+                % (_short_ps_error(error) or "код %s" % status)
             )
-        return (result.std_out or b"").decode("utf-8", "replace")
+        return decode_payload(_text(std_out))
 
     # --- операции чтения --------------------------------------------------
 
     def list_servers(self) -> list[DhcpServer]:
         """Все авторизованные в домене DHCP-серверы.
 
-        Один запрос вместо ручного перечисления двух десятков площадок: список
-        ведёт сама AD, и он всегда актуален.
+        Список ведёт сама AD, поэтому он всегда актуален. Но опросить каждый
+        из них удаётся не всегда: между площадками стоят межсетевые экраны, и
+        обращение к дальнему серверу отваливается с «Failed to get version».
         """
-        script = _PREAMBLE + (
-            "ConvertTo-Json -Compress -Depth 3 -InputObject "
-            "@(Get-DhcpServerInDC | Select-Object DnsName,"
-            "@{n='IPAddress';e={$_.IPAddress.IPAddressToString}})\n"
+        script = build_script(
+            "Get-DhcpServerInDC | %s" % _SELECT_SERVER
         )
         return servers_from_rows(_rows(self.run(script)))
 
     def list_scopes(self, server: str) -> list[DhcpScopeInfo]:
-        script = _PREAMBLE + (
-            "ConvertTo-Json -Compress -Depth 3 -InputObject "
-            "@(Get-DhcpServerv4Scope -ComputerName '%s' | %s)\n"
+        script = build_script(
+            "Get-DhcpServerv4Scope -ComputerName '%s' | %s"
             % (_safe_host(server), _SELECT_SCOPE)
         )
         return scopes_from_rows(_rows(self.run(script)))
 
     def list_leases(self, server: str, scope_id: str) -> list[DhcpLease]:
-        script = _PREAMBLE + (
-            "ConvertTo-Json -Compress -Depth 3 -InputObject "
-            "@(Get-DhcpServerv4Lease -ComputerName '%s' -ScopeId '%s' | %s)\n"
+        script = build_script(
+            "Get-DhcpServerv4Lease -ComputerName '%s' -ScopeId '%s' | %s"
             % (_safe_host(server), _safe_ip(scope_id), _SELECT_LEASE)
         )
         return leases_from_rows(_rows(self.run(script)), server=server,
@@ -333,13 +430,18 @@ class DhcpClient:
 
     def find_lease(self, server: str, ip: str) -> DhcpLease | None:
         """Аренда одного адреса — для проверки «что там сейчас»."""
-        script = _PREAMBLE + (
-            "ConvertTo-Json -Compress -Depth 3 -InputObject "
-            "@(Get-DhcpServerv4Lease -ComputerName '%s' -IPAddress '%s' | %s)\n"
+        script = build_script(
+            "Get-DhcpServerv4Lease -ComputerName '%s' -IPAddress '%s' | %s"
             % (_safe_host(server), _safe_ip(ip), _SELECT_LEASE)
         )
         leases = leases_from_rows(_rows(self.run(script)), server=server)
         return leases[0] if leases else None
+
+
+def _text(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return str(value or "")
 
 
 def _short_ps_error(text: str) -> str:
@@ -353,10 +455,10 @@ def _short_ps_error(text: str) -> str:
 
 def _import_winrm():
     try:
-        import winrm
+        from winrm import protocol
     except ImportError as exc:  # pragma: no cover - зависит от окружения
         raise DhcpError(
             "Не установлена библиотека pywinrm. Установите её в окружении "
             "портала: pip install pywinrm"
         ) from exc
-    return winrm
+    return protocol

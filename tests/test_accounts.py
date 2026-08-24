@@ -285,3 +285,44 @@ def test_manager_is_not_an_operator(app):
     # Просмотр открыт, изменение — нет.
     assert client.get("/skydns/domains").status_code == 200
     assert client.post("/skydns/lookup-batch").status_code == 403
+
+
+def test_login_survives_a_busy_database(app, monkeypatch):
+    """Занятая база не должна мешать войти.
+
+    Отметка о времени входа — сведение для журнала, а не часть входа: человек
+    уже опознан и сессия уже выдана. Пока commit был обязательным, ночная
+    выгрузка держала SQLite дольше busy_timeout, и вход отдавал 500 при
+    правильных логине и пароле. Ровно так и случилось на боевом сервере.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from app.core.extensions import db as real_db
+
+    original = real_db.session.commit
+    calls = {"n": 0}
+
+    def busy_once():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OperationalError("UPDATE users", {}, Exception("database is locked"))
+        return original()
+
+    monkeypatch.setattr(real_db.session, "commit", busy_once)
+
+    client = app.test_client()
+    response = client.post("/login",
+                           data={"username": "boss", "password": "password123"})
+    assert response.status_code == 302, "вход должен пройти, а не упасть"
+
+    monkeypatch.undo()
+    # И сессия действительно выдана: закрытая страница открывается.
+    assert client.get("/").status_code == 200
+
+
+def test_wrong_password_still_rejected(app):
+    client = app.test_client()
+    response = client.post("/login",
+                           data={"username": "boss", "password": "неверный"})
+    assert response.status_code == 200
+    assert "Неверный логин или пароль" in response.get_data(as_text=True)

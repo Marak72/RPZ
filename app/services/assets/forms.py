@@ -46,6 +46,7 @@ class DhcpSettingsForm(FlaskForm):
     password = PasswordField("Пароль", validators=[Optional()])
     timeout = IntegerField("Таймаут, секунд",
                            validators=[Optional(), NumberRange(min=10, max=1800)])
+    discover = BooleanField("Искать все серверы DHCP в домене")
     servers = TextAreaField("Серверы DHCP", validators=[Optional()])
     submit_dhcp = SubmitField("Сохранить")
     test_dhcp = SubmitField("Проверить связь")

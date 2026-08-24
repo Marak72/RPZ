@@ -89,15 +89,18 @@ from .settings import (
     KEY_DHCP_HOST,
     KEY_DHCP_PASSWORD,
     KEY_DHCP_PORT,
+    KEY_DHCP_DISCOVER,
     KEY_DHCP_SERVERS,
     KEY_DHCP_SSL,
     KEY_DHCP_TIMEOUT,
     KEY_DHCP_USER,
     allowed_servers,
+    discover_servers,
     get_setting,
     load_dhcp_config,
     load_ldap_config,
     set_setting,
+    target_servers,
 )
 
 assets_bp = Blueprint("assets", __name__, url_prefix="/assets",
@@ -568,7 +571,8 @@ def sync():
         form=form,
         dhcp_configured=load_dhcp_config().is_configured,
         ad_configured=load_ldap_config().is_configured,
-        servers=allowed_servers(),
+        servers=target_servers(),
+        discover=discover_servers(),
         recent=(AssetSyncLog.query.order_by(AssetSyncLog.started_at.desc())
                 .limit(15).all()),
         scopes_count=DhcpScope.query.count(),
@@ -648,19 +652,18 @@ def _dhcp_worker(user_id: int):
         log = _open_log("dhcp", user_id)
         received = created = updated = scopes_done = 0
         errors: list[str] = []
+        failed_servers: list[str] = []
 
         try:
             with DhcpClient(config) as client:
-                handle.progress(detail="Получаем список серверов DHCP…")
-                names = allowed_servers()
-                if names:
-                    servers = list(names)
-                else:
+                servers = target_servers()
+                if not servers:
+                    handle.progress(detail="Спрашиваем у домена список серверов…")
                     servers = [s.name or s.address for s in client.list_servers()]
                 if not servers:
                     raise JobError(
-                        "В домене не нашлось ни одного авторизованного "
-                        "сервера DHCP. Укажите серверы вручную в настройках."
+                        "Не задано ни одного сервера DHCP и в домене их не "
+                        "нашлось. Укажите сервер в настройках сервиса."
                     )
 
                 # Сначала собираем области всех серверов: так известно общее
@@ -672,6 +675,7 @@ def _dhcp_worker(user_id: int):
                         for scope in client.list_scopes(server):
                             plan.append((server, scope))
                     except DhcpError as exc:
+                        failed_servers.append(server)
                         errors.append("%s: %s" % (server, exc))
                 handle.set_total(len(plan) or 1)
 
@@ -713,13 +717,21 @@ def _dhcp_worker(user_id: int):
             _close_log(log.id, ok=False, message=str(exc))
             raise
 
-        message = ("Серверов: %d, областей: %d, аренд получено: %d "
-                   "(новых адресов: %d, обновлено: %d), связано с AD: %d."
-                   % (len(servers), scopes_done, received, created, updated,
-                      linked))
+        message = ("Серверов опрошено: %d из %d, областей: %d, аренд получено: "
+                   "%d (новых адресов: %d, обновлено: %d), связано с AD: %d."
+                   % (len(servers) - len(failed_servers), len(servers),
+                      scopes_done, received, created, updated, linked))
         if errors:
-            message += " Не удалось опросить: %s" % "; ".join(errors[:10])
-        _close_log(log.id, ok=not errors, message=message,
+            # Раньше сюда сваливались все отказы подряд, и при веере по
+            # домену сообщение раздувалось до нескольких тысяч знаков
+            # одинаковых строк — полезный итог в нём тонул.
+            message += (" Не ответили серверов: %d (%s%s)."
+                        % (len(failed_servers), ", ".join(failed_servers[:3]),
+                           " и другие" if len(failed_servers) > 3 else ""))
+            message += " Первая причина: %s" % errors[0]
+        # Частичный сбор — это не провал: аренды, которые удалось прочитать,
+        # уже в базе и работают. Провал — когда не собрано вообще ничего.
+        _close_log(log.id, ok=bool(received), message=message,
                    servers=len(servers), scopes=scopes_done, received=received,
                    created=created, updated=updated)
         return message
@@ -840,6 +852,7 @@ def _dhcp_form() -> DhcpSettingsForm:
         form.username.data = get_setting(KEY_DHCP_USER, "")
         form.timeout.data = int(get_setting(KEY_DHCP_TIMEOUT, "")
                                 or DEFAULT_DHCP_TIMEOUT)
+        form.discover.data = get_setting(KEY_DHCP_DISCOVER, "") == "1"
         form.servers.data = get_setting(KEY_DHCP_SERVERS, "")
     return form
 
@@ -863,6 +876,7 @@ def _save_dhcp(form) -> None:
     set_setting(KEY_DHCP_SSL, "1" if form.use_ssl.data else "0")
     set_setting(KEY_DHCP_USER, (form.username.data or "").strip())
     set_setting(KEY_DHCP_TIMEOUT, str(form.timeout.data or DEFAULT_DHCP_TIMEOUT))
+    set_setting(KEY_DHCP_DISCOVER, "1" if form.discover.data else "0")
     set_setting(KEY_DHCP_SERVERS, (form.servers.data or "").strip())
     if form.password.data:
         set_setting(KEY_DHCP_PASSWORD, form.password.data, is_secret=True)

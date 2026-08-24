@@ -35,8 +35,15 @@ KEY_DHCP_TIMEOUT = "assets_dhcp_timeout"
 KEY_DHCP_USER = "assets_dhcp_user"
 KEY_DHCP_PASSWORD = "assets_dhcp_password"  # секрет
 # Ограничить выгрузку перечисленными серверами (по одному в строке).
-# Пусто — брать все авторизованные в домене.
+# Пусто — см. KEY_DHCP_DISCOVER.
 KEY_DHCP_SERVERS = "assets_dhcp_servers"
+# Искать все серверы DHCP в домене (Get-DhcpServerInDC) или ограничиться тем,
+# к которому подключаемся. По умолчанию выключено, и вот почему: в домене
+# зарегистрирован 61 сервер, но дотянуться контроллер смог ровно до одного —
+# остальные закрыты межсетевыми экранами между площадками. Веер по всем давал
+# 60 отказов «Failed to get version», раздутый журнал и потерянное время при
+# ровно том же итоге.
+KEY_DHCP_DISCOVER = "assets_dhcp_discover"
 
 #: Глобальный каталог, а не обычный LDAP: домен разнесён по области, и объект
 #: машины лежит в своём сайте. Порт 389 отвечает только за свой раздел и на
@@ -95,3 +102,23 @@ def allowed_servers() -> list[str]:
         for line in raw.splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
+
+
+def discover_servers() -> bool:
+    """Спрашивать ли у домена список всех серверов DHCP."""
+    return get_bool(KEY_DHCP_DISCOVER, False)
+
+
+def target_servers() -> list[str]:
+    """Какие серверы DHCP опрашивать, если список не задан вручную.
+
+    Пустой ответ означает «спросить у домена» — решение принимает вызывающий,
+    потому что для этого нужно живое соединение.
+    """
+    explicit = allowed_servers()
+    if explicit:
+        return explicit
+    if discover_servers():
+        return []
+    host = get_setting(KEY_DHCP_HOST, "") or get_setting(KEY_AD_HOST, "")
+    return [host] if host else []

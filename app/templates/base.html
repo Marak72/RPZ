@@ -74,6 +74,12 @@
       </a>
       {% endif %}
 
+      {# Страницы ошибок наследуют эту вёрстку и показываются в том числе тем,
+         кто ещё не вошёл. У анонимного посетителя current_user — это
+         AnonymousUserMixin, у него нет ни display_name, ни role_title, и
+         обращение к ним роняло отрисовку: вместо честного «404» портал
+         отдавал 500. #}
+      {% if current_user.is_authenticated %}
       <a class="user-chip" href="{{ url_for('admin.profile') }}" title="Мой профиль">
         <span class="user-chip__avatar">{{ current_user.display_name[0] }}</span>
         <span>
@@ -84,6 +90,11 @@
       <a class="btn btn--ghost btn--icon" href="{{ url_for('auth.logout') }}" title="Выйти">
         {{ ico.icon('logout') }}
       </a>
+      {% else %}
+      <a class="btn btn--ghost" href="{{ url_for('auth.login') }}">
+        {{ ico.icon('logout') }} Войти
+      </a>
+      {% endif %}
     </header>
 
     <main class="content{% block content_class %}{% endblock %}">
