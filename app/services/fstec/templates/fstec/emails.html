@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% import "_icons.html" as ico %}
+{% block title %}Адреса почты{% endblock %}
+{% block subheading %}<div class="topbar__sub">Отправители из писем ФСТЭК</div>{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div class="page-head__text">
+    <h2>Адреса электронной почты</h2>
+    <p>Адреса, с которых велась рассылка. Блокируются на почтовом шлюзе.</p>
+  </div>
+  <a class="btn" href="{{ url_for('fstec.emails_csv') }}">{{ ico.icon('download') }} Экспорт CSV</a>
+</div>
+
+<div class="note" style="margin-bottom:1rem">
+  {{ ico.icon('info', 'icon icon-sm') }}
+  Домен из адреса в блокировку <strong>не уходит автоматически</strong>: фишинг
+  рассылают с mail.ru, gmail.com и бесплатных хостингов, и выгрузка такого
+  домена в RPZ оставила бы отдел без почты. Но если домен — подделка вроде
+  <code>roskomnadsor.ru</code> и встречается только в адресе отправителя,
+  отправьте его в блокировку кнопкой в строке.
+</div>
+
+<div class="card">
+  <div class="toolbar">
+    <form method="get" class="inline">
+      <div class="search">
+        {{ ico.icon('search') }}
+        <input type="search" name="q" value="{{ q }}" placeholder="Адрес или домен" data-search-focus>
+      </div>
+      <button class="btn btn--sm">Найти</button>
+      {% if q %}<a class="btn btn--ghost btn--sm" href="{{ url_for('fstec.emails') }}">Сбросить</a>{% endif %}
+    </form>
+    <div class="toolbar__spacer"></div>
+    <button type="button" class="btn btn--sm" data-copy-column="emailTable">
+      {{ ico.icon('copy') }} <span data-copy-label>Копировать адреса</span>
+    </button>
+  </div>
+
+  <div class="table-wrap">
+    <table class="table" id="emailTable">
+      <thead>
+        <tr>
+          <th>Адрес</th><th>Домен</th><th>Письма</th><th>Добавлен</th>
+          {% if current_user.is_operator %}<th></th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in items %}
+        <tr>
+          <td class="value" data-value="{{ row.value }}">
+            {{ row.value }}
+            <button type="button" class="copy-btn" data-copy="{{ row.value }}" title="Скопировать">
+              {{ ico.icon('copy', 'icon icon-sm') }}
+            </button>
+          </td>
+          <td class="text-xs">
+            {{ row.host or '—' }}
+            {% if row.host in known_hosts %}
+            <span class="badge badge--neutral">уже в списке</span>
+            {% endif %}
+          </td>
+          <td class="text-xs">
+            {% for number in row.letter_numbers.split(', ') if number %}
+            <span class="badge badge--neutral">{{ number }}</span>
+            {% else %}—{% endfor %}
+          </td>
+          <td class="muted nowrap text-xs">
+            {{ row.created_at.strftime('%d.%m.%Y %H:%M') if row.created_at else '—' }}
+          </td>
+          {% if current_user.is_operator %}
+          <td class="nowrap">
+            {% if row.host and row.host not in known_hosts %}
+            <form method="post" action="{{ url_for('fstec.email_block_host', email_id=row.id) }}"
+                  class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="back" value="{{ current_url() }}">
+              <button class="btn btn--ghost btn--sm"
+                      title="Отправить домен {{ row.host }} в кандидаты на блокировку">
+                {{ ico.icon('lock', 'icon icon-sm') }} Заблокировать домен
+              </button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('fstec.email_delete', email_id=row.id) }}"
+                  class="inline" data-confirm="Удалить адрес {{ row.value }}?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="back" value="{{ current_url() }}">
+              <button class="btn btn--ghost btn--sm" title="Удалить адрес">
+                {{ ico.icon('x', 'icon icon-sm') }}
+              </button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% else %}
+        <tr data-empty>
+          <td colspan="{{ 5 if current_user.is_operator else 4 }}">
+            <div class="empty">
+              {{ ico.icon('inbox') }}
+              <div class="empty__title">Адресов пока нет</div>
+              <div class="empty__text">
+                {% if q %}Измените условия поиска.
+                {% else %}Адреса появятся здесь после загрузки писем, в которых
+                  указан отправитель.{% endif %}
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% include "_pagination.html" %}
+</div>
+{% endblock %}

@@ -26,6 +26,10 @@
     {{ ico.icon('link') }} URL с путями
     <span class="nav-link__count">{{ nav_counts.urls }}</span>
   </a>
+  <a class="nav-link {% if ep == 'fstec.emails' %}is-active{% endif %}" href="{{ url_for('fstec.emails') }}">
+    {{ ico.icon('inbox') }} Адреса почты
+    <span class="nav-link__count">{{ nav_counts.emails }}</span>
+  </a>
   <a class="nav-link {% if ep == 'fstec.iocs' %}is-active{% endif %}" href="{{ url_for('fstec.iocs') }}">
     {{ ico.icon('hash') }} Хеши
     <span class="nav-link__count">{{ nav_counts.hashes }}</span>

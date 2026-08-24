@@ -102,9 +102,17 @@ def test_inline_indicators_after_address_word():
     assert "crystalxrat.net" in _vals(res, "domain")
 
 
-def test_email_domain_extracted():
+def test_email_from_a_lookalike_sender_is_kept_as_an_address():
+    """roskomnadsor.ru — подделка под роскомнадзор, и в письме она только в адресе.
+
+    Автоматически в блокировку такой домен не уходит: то же правило, что и для
+    ссылок с путём. Иначе фишинг с mail.ru закрыл бы отделу почту целиком.
+    Аналитик видит адрес вместе с хостом и блокирует домен одной кнопкой.
+    """
     res = doc_parser.extract(LETTER)
-    assert "roskomnadsor.ru" in _vals(res, "domain")
+    emails = _vals(res, "email")
+    assert any(e.endswith("@roskomnadsor.ru") for e in emails), emails
+    assert "roskomnadsor.ru" not in _vals(res, "domain")
 
 
 def test_hashes_classified_and_lowercased():
@@ -128,3 +136,57 @@ def test_valid_ipv4_helper():
 def test_deduplication():
     res = doc_parser.extract("a[.]com;\na[.]com;\nA[.]COM;")
     assert len(_vals(res, "domain")) == 1
+
+
+# --- адреса электронной почты ---------------------------------------------
+
+def _values(text, kind):
+    return [e.value for e in doc_parser.extract(text)
+            if e.entry_type == kind]
+
+
+def test_email_is_extracted_as_an_indicator():
+    text = "Рассылка велась с адреса fake-sender@evil-domain.ru;"
+    assert "fake-sender@evil-domain.ru" in _values(text, "email")
+
+
+def test_mail_service_from_an_email_is_not_blocked():
+    """Фишинг шлют с mail.ru — заблокировать его значит закрыть отделу почту."""
+    text = "Письма приходили с адреса zloumyshlennik@mail.ru."
+    assert "mail.ru" not in _values(text, "domain")
+    assert "zloumyshlennik@mail.ru" in _values(text, "email")
+
+
+def test_attacker_domain_from_an_email_is_not_blocked_either():
+    """Правило одно для всех: домен берётся из отдельной строки, не из адреса."""
+    text = "Отправитель: admin@fake-fstec.ru"
+    assert "fake-fstec.ru" not in _values(text, "domain")
+
+
+def test_domain_listed_separately_is_still_blocked_even_if_it_is_also_an_email():
+    text = (
+        "Отправитель: admin@fake-fstec.ru\n"
+        "Вредоносные домены:\n"
+        "fake-fstec.ru;\n"
+    )
+    assert "fake-fstec.ru" in _values(text, "domain")
+    assert "admin@fake-fstec.ru" in _values(text, "email")
+
+
+def test_email_host_is_remembered_for_the_analyst():
+    entries = [e for e in doc_parser.extract("с адреса a.petrov@evil.ru")
+               if e.entry_type == "email"]
+    assert entries[0].host == "evil.ru"
+
+
+def test_email_is_normalized_to_lower_case():
+    assert "sender@evil.ru" in _values("Адрес: Sender@EVIL.RU", "email")
+
+
+def test_defanged_email_is_understood():
+    """В письмах адрес тоже маскируют: sender[@]evil[.]ru встречается регулярно."""
+    assert "sender@evil.ru" in _values("Адрес sender@evil[.]ru;", "email")
+
+
+def test_text_without_emails_yields_none():
+    assert _values("Домен evil.ru; и адрес 1.2.3.4;", "email") == []

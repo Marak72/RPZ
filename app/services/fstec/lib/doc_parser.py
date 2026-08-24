@@ -6,8 +6,8 @@ example[.]com, hxxp[:]//..., 5[.]252[.]153[.]67. Имена вложений, н
 ссылки-источники сидят внутри обычных предложений — их брать не нужно.
 
 Поэтому индикаторы извлекаются только из сегментов, которые ЦЕЛИКОМ являются
-доменом / IP / URL / хешем. Дополнительно из любого места текста вытягивается
-домен из e-mail отправителя.
+доменом / IP / URL / хешем. Дополнительно из любого места текста вытягиваются
+адреса электронной почты.
 
 Типы записей (entry_type):
   domain  — домен, пригоден для блокировки в RPZ
@@ -16,6 +16,9 @@ example[.]com, hxxp[:]//..., 5[.]252[.]153[.]67. Имена вложений, н
             индикаторы выделяются отдельно. Хост из такой ссылки доменом НЕ
             становится: вредоносна страница, а не сайт целиком (github.com,
             telegram.me и подобные), а RPZ закрывает имя целиком
+  email   — адрес отправителя. Домен из адреса доменом-кандидатом тоже НЕ
+            становится — по той же причине: фишинг шлют с mail.ru и gmail.com,
+            и блокировка такого домена закрыла бы отделу почту целиком
   sha256 / sha1 / md5 — хеши-индикаторы для систем мониторинга
 
 Функции работают со строкой текста, поэтому их легко тестировать без файлов.
@@ -36,7 +39,7 @@ _DOMAIN_RE = re.compile(
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+" + _TLD_PATTERN, re.IGNORECASE
 )
 _EMAIL_RE = re.compile(
-    r"[a-z0-9._%+-]+@((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"([a-z0-9._%+-]+)@((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
     + _TLD_PATTERN + r")",
     re.IGNORECASE,
 )
@@ -71,8 +74,13 @@ MAX_LABEL_LENGTH = 63
 @dataclass
 class ExtractedEntry:
     value: str
-    entry_type: str  # domain / ip / url / sha256 / sha1 / md5
-    host: str = ""   # для url — извлечённый хост
+    entry_type: str  # domain / ip / url / email / sha256 / sha1 / md5
+    host: str = ""   # для url и email — извлечённый домен
+    # Строка документа, из которой индикатор взят, — как она там написана,
+    # до снятия маскировки. Нужна для писем в PDF: там текст восстанавливается
+    # из глифов, и сверить извлечённое значение с исходной строкой — часто
+    # единственный способ заметить подмену похожего символа.
+    context: str = ""
 
 
 # --- Нормализация (refang) ------------------------------------------------
@@ -205,8 +213,88 @@ def _classify_segment(seg: str) -> list[ExtractedEntry]:
     return []
 
 
+def unparsed_candidates(text: str) -> list[tuple[str, str]]:
+    """Строки, которые выглядят как индикатор, но проверку не прошли.
+
+    Зачем это нужно. Разбор устроен строго: всё, что не является доменом, IP,
+    ссылкой или хешем, отбрасывается — иначе в кандидаты уехали бы имена
+    вложений и куски предложений. Но для писем в PDF строгость оборачивается
+    против нас: подмена символа делает индикатор невалидным, и он пропадает
+    молча. Домен ``gоogle-drive.net`` с кириллической «о» не пройдёт проверку
+    доменного имени, хеш с буквой ``g`` — проверку шестнадцатеричной строки.
+    Аналитик при этом даже не узнает, что строка была.
+
+    Поэтому такие сегменты собираются отдельно и показываются как «не
+    распознано». Автоматически их не исправить — угадать исходный символ
+    нельзя, — но человек, увидев строку письма, поймёт всё за секунду.
+
+    Возвращает пары «сегмент, чем он похож на индикатор».
+    """
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    for line in refang(text).splitlines():
+        for raw in line.split(";"):
+            seg = _clean_segment(raw)
+            if not seg or len(seg) > 400 or seg in seen:
+                continue
+            if _classify_segment(seg):
+                continue          # разобралось — вопросов нет
+            if " " in seg or "\t" in seg:
+                continue          # это предложение, а не индикатор
+
+            reason = _looks_like_indicator(seg)
+            if reason:
+                seen.add(seg)
+                out.append((seg, reason))
+    return out
+
+
+def _looks_like_indicator(seg: str) -> str:
+    """Чем сегмент похож на индикатор. Пустая строка — ничем."""
+    letters_and_digits = sum(ch.isalnum() for ch in seg)
+    if letters_and_digits < 4:
+        return ""
+
+    # Похоже на хеш: длина рядом с известной и почти весь состав — hex.
+    compact = seg.strip()
+    if 28 <= len(compact) <= 70 and not compact.count("."):
+        hexish = sum(ch in "0123456789abcdefABCDEF" for ch in compact)
+        if hexish >= len(compact) - 3:
+            return "похоже на хеш, но есть символы вне 0-9 и a-f"
+
+    # Похоже на доменное имя: есть точка, нет пробелов, разумная длина.
+    if "." in compact and 4 <= len(compact) <= MAX_DOMAIN_LENGTH:
+        tail = compact.rsplit(".", 1)[-1]
+        if 2 <= len(tail) <= 24 and tail.lower() not in _FILE_EXTENSIONS:
+            if any(not ch.isascii() for ch in compact):
+                return "похоже на домен, но записан не латиницей"
+            return "похоже на домен, но не прошёл проверку имени"
+    return ""
+
+
+def _attach_context(entries: list[ExtractedEntry], original: str) -> None:
+    """Приписать каждому индикатору строку документа, где он встретился.
+
+    Ищем по исходному тексту, а не по обработанному: аналитику нужна строка
+    ровно в том виде, в каком она в письме, вместе с маскировкой. Сопоставляем
+    по обработанной копии строки — маскировка иначе не даст совпасть.
+    """
+    lines = original.splitlines()
+    refanged = [refang(line).lower() for line in lines]
+    for entry in entries:
+        if entry.context:
+            continue
+        needle = entry.value.lower()
+        for index, line in enumerate(refanged):
+            if needle in line:
+                entry.context = lines[index].strip()[:300]
+                break
+
+
 def extract(text: str) -> list[ExtractedEntry]:
-    """Извлечь уникальные индикаторы (домены, IP, URL, хеши) из текста письма."""
+    """Извлечь уникальные индикаторы (домены, IP, URL, почту, хеши)."""
+    original = text
     text = refang(text)
     seen: set[str] = set()
     result: list[ExtractedEntry] = []
@@ -226,12 +314,20 @@ def extract(text: str) -> list[ExtractedEntry]:
     for m in _INLINE_ADDR_RE.finditer(text):
         _add_many(_classify_segment(_clean_segment(m.group(1))))
 
-    # Домены из e-mail (встречаются внутри предложений, напр. отправитель).
-    for host in _EMAIL_RE.findall(text):
-        host = _normalize_domain(host)
-        if is_valid_domain(host) and host not in _ALLOWLIST:
-            _add_many([ExtractedEntry(value=host, entry_type="domain")])
+    # Адреса электронной почты. В блокировку уходит сам адрес, а не домен из
+    # него: с mail.ru или gmail.com рассылают фишинг, но закрыть эти сервисы
+    # отделу — куда больший ущерб, чем сама рассылка. Домен, вредоносный
+    # целиком, в письме приводится отдельной строкой и попадёт в кандидаты
+    # оттуда; иначе аналитик добавит его вручную, увидев хост рядом с адресом.
+    for match in _EMAIL_RE.finditer(text):
+        host = _normalize_domain(match.group(2))
+        if not is_valid_domain(host):
+            continue
+        address = (match.group(1) + "@" + host).lower()
+        _add_many([ExtractedEntry(value=address, entry_type="email",
+                                  host=host)])
 
+    _attach_context(result, original)
     return result
 
 

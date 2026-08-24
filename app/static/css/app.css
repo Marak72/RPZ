@@ -904,3 +904,10 @@ tr:hover .copy-btn { opacity: 1; }
 .job__cancel:disabled { cursor: default; text-decoration: none; }
 
 .job__detail--error { color: var(--danger); }
+
+/* Строка индикатора, к которому есть вопросы: извлечён из PDF и содержит
+   признаки подмены символа. Подсветка нужна, чтобы такие значения нельзя
+   было отметить не глядя вместе с остальными. */
+.table tr.row--warn > td {
+  background: var(--danger-soft);
+}

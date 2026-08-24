@@ -588,3 +588,169 @@ def test_push_view_links_source_to_its_letter(client):
     # Источник — ссылка на письмо, а не просто имя файла.
     assert f"/fstec/letters/{letter.id}" in body
     assert "240/24/1001" in body
+
+
+# --- Адреса электронной почты ----------------------------------------------
+
+LETTER_WITH_EMAIL = (
+    "Исх. № 240/24/5000 от 20.08.2026\n"
+    "Рассылка велась с адресов:\n"
+    "zloumyshlennik@mail.ru;\n"
+    "admin@roskomnadsor.ru;\n"
+    "Вредоносные домены:\n"
+    "evil-domain.ru;\n"
+).encode("utf-8")
+
+
+def _preview_of(client, body=LETTER_WITH_EMAIL, name="pismo.odt"):
+    return _upload(client, [(name, body)]).get_data(as_text=True)
+
+
+def test_mail_service_does_not_reach_the_blocking_tab(client):
+    """mail.ru в кандидатах на блокировку означал бы отдел без почты."""
+    from app.services.fstec.models import BlockEntry
+
+    page = _preview_of(client)
+    _save(client, ["0|evil-domain.ru"], _groups_json(page),
+          selected_email=["0|zloumyshlennik@mail.ru",
+                          "0|admin@roskomnadsor.ru"])
+
+    domains = {b.value for b in BlockEntry.query.filter_by(entry_type="domain")}
+    assert "evil-domain.ru" in domains
+    assert "mail.ru" not in domains
+    assert "roskomnadsor.ru" not in domains
+
+
+def test_emails_are_saved_with_their_domain(client):
+    from app.services.fstec.models import EmailEntry
+
+    page = _preview_of(client)
+    _save(client, [], _groups_json(page),
+          selected_email=["0|zloumyshlennik@mail.ru"])
+
+    entry = EmailEntry.query.filter_by(value="zloumyshlennik@mail.ru").first()
+    assert entry is not None
+    assert entry.host == "mail.ru"
+    # Адрес помнит письмо, из которого приехал.
+    assert entry.letters
+
+
+def test_preview_shows_emails_in_their_own_tab(client):
+    page = _preview_of(client)
+    assert "Адреса почты" in page
+    assert "zloumyshlennik@mail.ru" in page
+
+
+def test_emails_page_lists_them(client):
+    page = _preview_of(client)
+    _save(client, [], _groups_json(page),
+          selected_email=["0|admin@roskomnadsor.ru"])
+
+    body = client.get("/fstec/emails").get_data(as_text=True)
+    assert "admin@roskomnadsor.ru" in body
+    assert "roskomnadsor.ru" in body
+
+
+def test_lookalike_domain_can_be_blocked_in_one_click(client):
+    """Подделка вроде roskomnadsor.ru живёт только в адресе — её надо блокировать."""
+    from app.services.fstec.models import BlockEntry, EmailEntry
+
+    page = _preview_of(client)
+    _save(client, [], _groups_json(page),
+          selected_email=["0|admin@roskomnadsor.ru"])
+
+    entry = EmailEntry.query.filter_by(value="admin@roskomnadsor.ru").first()
+    response = client.post(f"/fstec/emails/{entry.id}/block-host",
+                           follow_redirects=True)
+    assert response.status_code == 200
+
+    block = BlockEntry.query.filter_by(value="roskomnadsor.ru").first()
+    assert block is not None
+    assert block.entry_type == "domain"
+    assert block.source == "email"
+    # Связь с письмом сохранена: иначе в карточке домена не видно, откуда он.
+    assert block.letters
+
+
+def test_blocking_the_same_host_twice_does_not_duplicate(client):
+    from app.services.fstec.models import BlockEntry, EmailEntry
+
+    page = _preview_of(client)
+    _save(client, [], _groups_json(page),
+          selected_email=["0|admin@roskomnadsor.ru"])
+    entry = EmailEntry.query.filter_by(value="admin@roskomnadsor.ru").first()
+
+    client.post(f"/fstec/emails/{entry.id}/block-host", follow_redirects=True)
+    client.post(f"/fstec/emails/{entry.id}/block-host", follow_redirects=True)
+
+    assert BlockEntry.query.filter_by(value="roskomnadsor.ru").count() == 1
+
+
+def test_letter_page_shows_its_emails(client):
+    from app.services.fstec.models import Letter
+
+    page = _preview_of(client)
+    _save(client, [], _groups_json(page),
+          selected_email=["0|zloumyshlennik@mail.ru"])
+
+    letter = Letter.query.first()
+    body = client.get(f"/fstec/letters/{letter.id}").get_data(as_text=True)
+    assert "zloumyshlennik@mail.ru" in body
+
+
+# --- Индикаторы из PDF -----------------------------------------------------
+
+PDF_LETTER = (
+    "Исх. № 240/24/6000 от 21.08.2026\n"
+    "Вредоносные ресурсы:\n"
+    "micr0soft-update.com;\n"
+    "chistiy-domen.ru;\n"
+).encode("utf-8")
+
+
+def _checkbox(page: str, value: str) -> str:
+    """Тег чекбокса для конкретного значения — чтобы не гадать по окрестностям."""
+    marker = 'value="0|%s"' % value
+    end = page.index(marker) + len(marker)
+    start = page.rindex("<input", 0, end)
+    return page[start:page.index(">", end) + 1]
+
+
+def test_pdf_indicators_go_to_their_own_tab(client):
+    """Из PDF значения выносятся отдельно: там возможна подмена символа."""
+    page = _upload(client, [("prilozhenie.pdf", PDF_LETTER)]).get_data(as_text=True)
+    assert "Из PDF — проверить" in page
+    # Во вкладке доменов их при этом нет — иначе отметились бы дважды.
+    domains_tab = page.split("Домены <span", 1)[1].split("</span>", 1)[0]
+    assert domains_tab.endswith(">0"), domains_tab
+
+
+def test_docx_indicators_stay_in_the_usual_tabs(client):
+    page = _upload(client, [("pismo.odt", PDF_LETTER)]).get_data(as_text=True)
+    assert "Из PDF — проверить" not in page
+
+
+def test_suspicious_value_from_pdf_is_not_preselected(client):
+    """Отмечать подозрительное заранее — значит согласиться не глядя."""
+    page = _upload(client, [("prilozhenie.pdf", PDF_LETTER)]).get_data(as_text=True)
+    assert "checked" not in _checkbox(page, "micr0soft-update.com")
+
+
+def test_clean_value_from_pdf_is_preselected(client):
+    """К чистому значению вопросов нет — лишней работы аналитику не добавляем."""
+    page = _upload(client, [("prilozhenie.pdf", PDF_LETTER)]).get_data(as_text=True)
+    assert "checked" in _checkbox(page, "chistiy-domen.ru")
+
+
+def test_pdf_row_shows_the_source_line(client):
+    page = _upload(client, [("prilozhenie.pdf", PDF_LETTER)]).get_data(as_text=True)
+    assert "micr0soft-update.com;" in page
+
+
+def test_pdf_indicators_are_saved_normally_when_confirmed(client):
+    """Вкладка меняет подачу, а не способ хранения."""
+    from app.services.fstec.models import BlockEntry
+
+    page = _upload(client, [("prilozhenie.pdf", PDF_LETTER)]).get_data(as_text=True)
+    _save(client, ["0|chistiy-domen.ru"], _groups_json(page))
+    assert BlockEntry.query.filter_by(value="chistiy-domen.ru").first() is not None

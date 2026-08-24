@@ -8,7 +8,7 @@
   <table class="table">
     <thead>
       <tr><th>Значение</th>{% if kind == 'addr' %}<th>Статус</th><th>VT</th>{% endif %}
-          {% if kind == 'url' %}<th>Хост</th>{% endif %}
+          {% if kind in ('url', 'email') %}<th>Домен</th>{% endif %}
           {% if kind == 'hash' %}<th>Тип</th>{% endif %}
           <th>Ещё в письмах</th></tr>
     </thead>
@@ -31,7 +31,7 @@
         </td>
         <td>{% include "_vt_badge.html" with context %}</td>
         {% endif %}
-        {% if kind == 'url' %}<td class="mono muted">{{ it.host }}</td>{% endif %}
+        {% if kind in ('url', 'email') %}<td class="mono muted">{{ it.host }}</td>{% endif %}
         {% if kind == 'hash' %}<td><span class="badge badge--info">{{ it.hash_type }}</span></td>{% endif %}
         <td class="text-xs muted">
           {% set others = it.letters | rejectattr('id', 'equalto', letter.id) | list %}
@@ -204,7 +204,7 @@
   <div class="card">
     <div class="card__header">{{ ico.icon('list') }}<span class="card__title">Индикаторы письма</span>
       <span class="badge badge--neutral" style="margin-left:auto">
-        всего: {{ domains|length + ips|length + urls|length + hashes|length }}
+        всего: {{ domains|length + ips|length + urls|length + emails|length + hashes|length }}
       </span>
     </div>
     <div class="card__body card__body--flush">
@@ -212,12 +212,14 @@
         <button class="tab is-active" data-tab="d">Домены <span class="tab__count">{{ domains|length }}</span></button>
         <button class="tab" data-tab="i">IP <span class="tab__count">{{ ips|length }}</span></button>
         <button class="tab" data-tab="u">URL <span class="tab__count">{{ urls|length }}</span></button>
+        <button class="tab" data-tab="e">Почта <span class="tab__count">{{ emails|length }}</span></button>
         <button class="tab" data-tab="h">Хеши <span class="tab__count">{{ hashes|length }}</span></button>
       </div>
       <div style="max-height:520px;overflow:auto">
         <div data-tab-panel="d" class="tab-panel is-active">{{ entry_rows(domains, 'addr') }}</div>
         <div data-tab-panel="i" class="tab-panel">{{ entry_rows(ips, 'addr') }}</div>
         <div data-tab-panel="u" class="tab-panel">{{ entry_rows(urls, 'url') }}</div>
+        <div data-tab-panel="e" class="tab-panel">{{ entry_rows(emails, 'email') }}</div>
         <div data-tab-panel="h" class="tab-panel">{{ entry_rows(hashes, 'hash') }}</div>
       </div>
     </div>

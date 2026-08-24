@@ -144,6 +144,10 @@ class ParsedFile:
     duplicate_of: str = ""
     # Основной файл письма (в нём нашлись реквизиты), а не приложение.
     is_primary: bool = False
+    # Строки, похожие на индикатор, но проверку не прошедшие. Собираются
+    # только для PDF: там подмена символа делает индикатор невалидным, и
+    # без этого списка он пропал бы молча.
+    unparsed: list = field(default_factory=list)
 
     @property
     def size(self) -> int:
@@ -201,6 +205,8 @@ def parse_files(uploaded, known_hashes=None) -> list[ParsedFile]:
         if text:
             try:
                 parsed.entries = doc_parser.extract(text)
+                if filename.lower().endswith(".pdf"):
+                    parsed.unparsed = doc_parser.unparsed_candidates(text)
             except Exception as exc:  # noqa: BLE001
                 parsed.error = f"не удалось разобрать текст: {exc}"
 

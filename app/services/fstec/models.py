@@ -72,6 +72,7 @@ def _link_table(name: str, entry_table: str) -> db.Table:
 block_entry_letters = _link_table("block_entry_letters", "block_entries")
 url_entry_letters = _link_table("url_entry_letters", "url_entries")
 ioc_hash_letters = _link_table("ioc_hash_letters", "ioc_hashes")
+email_entry_letters = _link_table("email_entry_letters", "email_entries")
 
 
 class Letter(db.Model):
@@ -321,7 +322,11 @@ class UrlEntry(_FromLetters, db.Model):
 
     RPZ работает на уровне DNS-имён и не умеет блокировать конкретные пути,
     поэтому такие индикаторы хранятся отдельно — их блокируют на прокси/WAF.
-    Хост из такой ссылки при этом попадает в BlockEntry как обычный домен.
+
+    Хост такой ссылки кандидатом на блокировку НЕ становится: вредоносна
+    страница, а не сайт целиком. Он сохраняется в ``host``, чтобы аналитик
+    видел его рядом и мог отправить в блокировку сам, если сайт вредоносен
+    целиком.
     """
 
     __tablename__ = "url_entries"
@@ -340,6 +345,37 @@ class UrlEntry(_FromLetters, db.Model):
 
     def __repr__(self) -> str:
         return f"<UrlEntry {self.value[:60]}…>"
+
+
+class EmailEntry(_FromLetters, db.Model):
+    """Адрес электронной почты из письма ФСТЭК.
+
+    Хранится отдельно по той же причине, что и ссылки с путями: домен из
+    адреса кандидатом на блокировку не становится. Фишинг рассылают с
+    mail.ru, gmail.com и с бесплатных хостингов — закрыть их в RPZ значит
+    оставить отдел без почты, а вреда от этого больше, чем от самой рассылки.
+
+    Домен сохраняется в ``host`` рядом с адресом: если он всё-таки вредоносен
+    целиком — как подделка вида ``roskomnadsor.ru``, встречающаяся только в
+    адресе отправителя, — аналитик отправляет его в блокировку одной кнопкой.
+    """
+
+    __tablename__ = "email_entries"
+
+    id = db.Column(db.Integer, primary_key=True)
+    value = db.Column(db.String(320), unique=True, nullable=False, index=True)
+    host = db.Column(db.String(255), nullable=False, default="", index=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, index=True)
+    added_by = db.Column(db.Integer, db.ForeignKey("users.id"))
+    notes = db.Column(db.String(500), default="")
+
+    letters = db.relationship(
+        "Letter", secondary=email_entry_letters,
+        backref=db.backref("email_entries", lazy="dynamic"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<EmailEntry {self.value}>"
 
 
 class IocHash(_FromLetters, db.Model):

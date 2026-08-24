@@ -1,5 +1,74 @@
 {% extends "base.html" %}
 {% import "_icons.html" as ico %}
+
+{# Индикаторы из PDF: отдельная таблица, потому что смотреть на них нужно
+   иначе. Рядом со значением показывается строка письма, из которой оно
+   извлечено, — сверить подмену похожего символа больше не по чему. #}
+{% macro pdf_table(items, multi) %}
+<div class="table-wrap">
+  <table class="table" id="pvPdf">
+    <thead>
+      <tr>
+        <th class="col-check"></th>
+        <th>Значение</th>
+        <th>Тип</th>
+        <th>Строка в письме</th>
+        {% if multi %}<th>Файл</th>{% endif %}
+        <th>Статус</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in items %}
+      {% set field = 'selected_url' if it.type == 'url'
+                     else ('selected_email' if it.type == 'email'
+                     else ('selected_hash' if it.type in ('sha256','sha1','md5')
+                     else 'selected')) %}
+      <tr {% if it.warnings %}class="row--warn"{% endif %}>
+        <td>
+          {% if it.get('unparsed') %}
+          {# Сохранить нельзя: значение заведомо испорчено подменой символа.
+             Показываем, чтобы аналитик увидел строку и завёл индикатор руками. #}
+          {{ ico.icon('alert', 'icon icon-sm') }}
+          {% else %}
+          {# Отмечено заранее только то, к чему нет вопросов: значения с
+             признаками подмены требуют решения, а не согласия по умолчанию. #}
+          <input type="checkbox" data-select="pdf" name="{{ field }}"
+                 value="{{ it.file }}|{{ it.value }}"
+                 {% if not it.already_in_db and not it.warnings %}checked{% endif %}>
+          {% endif %}
+        </td>
+        <td class="value" data-value="{{ it.value }}">
+          {{ it.value }}
+          {% if it.host and it.type in ('url', 'email') %}
+          <div class="text-xs muted">домен: {{ it.host }}</div>
+          {% endif %}
+          {% for w in it.warnings %}
+          <div class="text-xs" style="color:var(--danger)">
+            {{ ico.icon('alert', 'icon icon-sm') }} {{ w }}
+          </div>
+          {% endfor %}
+        </td>
+        <td><span class="badge badge--neutral">{{ it.type }}</span></td>
+        <td class="text-xs muted">{{ it.context or '—' }}</td>
+        {% if multi %}<td class="text-xs muted">{{ it.file_name }}</td>{% endif %}
+        <td>
+          {% if it.get('unparsed') %}<span class="badge badge--danger">не распознано</span>
+          {% elif it.in_rpz %}<span class="badge badge--success">уже в RPZ</span>
+          {% elif it.already_in_db %}<span class="badge badge--neutral">уже в базе</span>
+          {% elif it.warnings %}<span class="badge badge--danger">проверьте</span>
+          {% else %}<span class="badge badge--warning">новый</span>{% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr data-empty>
+        <td colspan="6"><div class="empty"><div class="empty__title">Из PDF ничего не извлекалось</div></div></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
 {% set file_count = letter_groups | map(attribute='files') | map('length') | sum %}
 {% block title %}Предпросмотр{% endblock %}
 {% block subheading %}<div class="topbar__sub">
@@ -25,8 +94,8 @@
       <thead>
         <tr>
           <th class="col-check"></th>
-          <th>{{ 'URL' if kind == 'url' else ('Хеш' if kind == 'hash' else 'Значение') }}</th>
-          {% if kind == 'url' %}<th>Хост</th>{% endif %}
+          <th>{{ 'URL' if kind == 'url' else ('Адрес' if kind == 'email' else ('Хеш' if kind == 'hash' else 'Значение')) }}</th>
+          {% if kind in ('url', 'email') %}<th>Домен</th>{% endif %}
           {% if kind == 'hash' %}<th>Тип</th>{% endif %}
           {% if multi %}<th>Из письма / файла</th>{% endif %}
           <th>Статус</th>
@@ -37,11 +106,20 @@
         <tr>
           <td>
             <input type="checkbox" data-select="{{ group }}"
-                   name="{{ 'selected_url' if kind == 'url' else ('selected_hash' if kind == 'hash' else 'selected') }}"
+                   name="{{ 'selected_url' if kind == 'url' else ('selected_email' if kind == 'email' else ('selected_hash' if kind == 'hash' else 'selected')) }}"
                    value="{{ it.file }}|{{ it.value }}" {% if not it.already_in_db %}checked{% endif %}>
           </td>
           <td class="value {% if kind == 'url' %}url-cell{% endif %}" data-value="{{ it.value }}">{{ it.value }}</td>
-          {% if kind == 'url' %}<td class="mono muted">{{ it.host }}</td>{% endif %}
+          {% if kind in ('url', 'email') %}
+          <td class="mono muted">
+            {{ it.host }}
+            {% if kind == 'email' and it.get('host_blocked') %}
+            <span class="badge badge--success">домен в RPZ</span>
+            {% elif kind == 'email' and it.get('host_known') %}
+            <span class="badge badge--neutral">домен в базе</span>
+            {% endif %}
+          </td>
+          {% endif %}
           {% if kind == 'hash' %}<td><span class="badge badge--info">{{ it.type }}</span></td>{% endif %}
           {% if multi %}
           <td class="text-xs muted">
@@ -93,6 +171,8 @@
   {% for it in groups.domains %}<input type="hidden" name="all_domain" value="{{ it.value }}">{% endfor %}
   {% for it in groups.ips %}<input type="hidden" name="all_ip" value="{{ it.value }}">{% endfor %}
   {% for it in groups.urls %}<input type="hidden" name="all_url" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.emails %}<input type="hidden" name="all_email" value="{{ it.value }}">{% endfor %}
+  {% for it in groups.pdf %}<input type="hidden" name="all_pdf" value="{{ it.value }}">{% endfor %}
   {% for it in groups.hashes %}
     <input type="hidden" name="all_hash" value="{{ it.value }}">
     <input type="hidden" name="htype_{{ it.value }}" value="{{ it.type }}">
@@ -175,8 +255,15 @@
       {{ ico.icon('server', 'icon icon-sm') }} IP <span class="tab__count">{{ groups.ips|length }}</span></button>
     <button type="button" class="tab" data-tab="url">
       {{ ico.icon('link', 'icon icon-sm') }} URL с путями <span class="tab__count">{{ groups.urls|length }}</span></button>
+    <button type="button" class="tab" data-tab="email">
+      {{ ico.icon('inbox', 'icon icon-sm') }} Адреса почты <span class="tab__count">{{ groups.emails|length }}</span></button>
     <button type="button" class="tab" data-tab="hash">
       {{ ico.icon('hash', 'icon icon-sm') }} Хеши <span class="tab__count">{{ groups.hashes|length }}</span></button>
+    {% if groups.pdf %}
+    <button type="button" class="tab" data-tab="pdf">
+      {{ ico.icon('file', 'icon icon-sm') }} Из PDF — проверить
+      <span class="tab__count">{{ groups.pdf|length }}</span></button>
+    {% endif %}
   </div>
 
   <div>
@@ -189,13 +276,44 @@
       {{ rows_table('pvIp', groups.ips, 'ip', 'ip', multi) }}
     </div>
     <div data-tab-panel="url" class="tab-panel">
-      <p class="text-sm muted" style="margin-bottom:.5rem">Пути RPZ не блокирует — хост при этом сохраняется во вкладке «Домены».</p>
+      <p class="text-sm muted" style="margin-bottom:.5rem">
+        Пути RPZ не блокирует. Хост такой ссылки в домены <strong>не попадает</strong>:
+        вредоносна страница, а не сайт целиком.
+      </p>
       {{ rows_table('pvUrl', groups.urls, 'url', 'url', multi) }}
+    </div>
+    <div data-tab-panel="email" class="tab-panel">
+      <p class="text-sm muted" style="margin-bottom:.5rem">
+        Адреса отправителей — для блокировки на почтовом шлюзе. Домен из адреса
+        в кандидаты <strong>не уходит</strong>: рассылку ведут с mail.ru и
+        gmail.com. Если домен — подделка, отправьте его в блокировку из раздела
+        «Адреса почты».
+      </p>
+      {{ rows_table('pvEmail', groups.emails, 'email', 'email', multi) }}
     </div>
     <div data-tab-panel="hash" class="tab-panel">
       <p class="text-sm muted" style="margin-bottom:.5rem">Хеши сохраняются отдельным списком для SIEM.</p>
       {{ rows_table('pvHash', groups.hashes, 'hash', 'hash', multi) }}
     </div>
+    {% if groups.pdf %}
+    <div data-tab-panel="pdf" class="tab-panel">
+      <div class="alert alert--warning" style="margin-bottom:.75rem">
+        {{ ico.icon('alert') }}
+        <div class="alert__text">
+          В PDF нет текста как такового — он восстанавливается из начертаний
+          символов. Латинская <code>O</code> легко становится нулём, <code>l</code>
+          единицей, а после распознавания — и кириллической буквой. Индикатор
+          при этом выглядит правдоподобно, но ведёт не туда: заблокируем не тот
+          домен, а настоящий останется работать. Поэтому сверьте значение со
+          <strong>строкой письма</strong> в соседнем столбце. Отмеченные красным
+          заранее не выбраны, а строки с пометкой «не распознано» сохранить
+          нельзя вовсе — подставьте верное значение вручную через
+          «Добавить вручную».
+        </div>
+      </div>
+      {{ pdf_table(groups.pdf, multi) }}
+    </div>
+    {% endif %}
   </div>
 </form>
 {% endblock %}

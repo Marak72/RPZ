@@ -52,9 +52,10 @@ from .models import (
     RpzEntry,
     RpzSnapshot,
     SshServer,
+    EmailEntry,
     UrlEntry,
 )
-from .lib import doc_parser, rpz_parser, rpz_writer
+from .lib import doc_parser, rpz_parser, rpz_writer, verify
 from .lib.rpz_writer import PushError
 from .lib.ssh_client import SshError, read_remote_file, test_connection
 from ...core.web_utils import csv_response as _csv_response
@@ -83,7 +84,8 @@ fstec_bp.before_request(service_guard("fstec"))
 PER_PAGE = 100
 
 
-NAV_COUNTS_EMPTY = {"domains": 0, "ips": 0, "urls": 0, "hashes": 0,
+NAV_COUNTS_EMPTY = {"domains": 0, "ips": 0, "urls": 0, "emails": 0,
+                    "hashes": 0,
                     "blocked": 0, "pending": 0, "documents": 0}
 
 
@@ -95,6 +97,7 @@ def _nav_counts() -> dict:
         "domains": domains.count(),
         "ips": BlockEntry.query.filter_by(entry_type="ip").count(),
         "urls": UrlEntry.query.count(),
+        "emails": EmailEntry.query.count(),
         "hashes": IocHash.query.count(),
         "blocked": len(blocked),
         "pending": sum(1 for d in domains.all()
@@ -147,6 +150,7 @@ def dashboard():
         "domains": domains_q.count(),
         "ips": BlockEntry.query.filter_by(entry_type="ip").count(),
         "urls": UrlEntry.query.count(),
+        "emails": EmailEntry.query.count(),
         "hashes": IocHash.query.count(),
         "pending": domains_q.filter(BlockEntry.status == STATUS_NEW).count(),
         "pushed": domains_q.filter(BlockEntry.status == STATUS_PUSHED).count(),
@@ -356,14 +360,39 @@ def _split_extracted(groups) -> dict:
     """
     existing = {b.value for b in BlockEntry.query.all()}
     existing_urls = {u.value for u in UrlEntry.query.all()}
+    existing_emails = {e.value for e in EmailEntry.query.all()}
     existing_hashes = {h.value for h in IocHash.query.all()}
     blocked = _latest_blocked_domains()
 
-    buckets = {"domains": [], "ips": [], "urls": [], "hashes": []}
+    # «pdf» — не тип индикатора, а источник: всё, что извлечено из PDF,
+    # выносится в отдельную вкладку и не попадает в остальные. Текст в PDF
+    # восстанавливается из глифов, и подмена похожего символа (O на 0)
+    # даёт правдоподобный, но неверный индикатор. Такие значения аналитик
+    # сверяет с исходной строкой письма, а не отмечает не глядя.
+    buckets = {"domains": [], "ips": [], "urls": [], "emails": [],
+               "hashes": [], "pdf": []}
     seen: dict[tuple, dict] = {}
 
     for group_index, letter in enumerate(groups):
         for parsed_file in letter.files:
+            # Строки из PDF, не прошедшие проверку: показываем как есть, без
+            # галочки. Сохранить их нельзя — значение заведомо испорчено, —
+            # но и потерять молча нельзя: именно здесь прячется подмена.
+            for value, reason in getattr(parsed_file, "unparsed", ()):
+                buckets["pdf"].append({
+                    "value": value,
+                    "type": "не распознано",
+                    "file": parsed_file.index,
+                    "group": group_index,
+                    "letters": [letter.number] if letter.number else [],
+                    "file_name": parsed_file.filename,
+                    "context": value,
+                    "host": "",
+                    "warnings": [reason],
+                    "already_in_db": False,
+                    "in_rpz": False,
+                    "unparsed": True,
+                })
             for entry in parsed_file.entries:
                 key = (entry.entry_type, entry.value)
                 known = seen.get(key)
@@ -380,7 +409,24 @@ def _split_extracted(groups) -> dict:
                     "group": group_index,
                     "letters": [letter.number] if letter.number else [],
                     "file_name": parsed_file.filename,
+                    "context": entry.context,
+                    "host": entry.host,
                 }
+
+                if verify.is_pdf(parsed_file.filename):
+                    item["warnings"] = verify.warnings_for(
+                        entry.value, entry.entry_type)
+                    item["already_in_db"] = entry.value in (
+                        existing_urls if entry.entry_type == "url"
+                        else existing_emails if entry.entry_type == "email"
+                        else existing_hashes if entry.entry_type in HASH_TYPES
+                        else existing
+                    )
+                    item["in_rpz"] = (entry.entry_type == "domain"
+                                      and entry.value in blocked)
+                    buckets["pdf"].append(item)
+                    continue
+
                 if entry.entry_type == "domain":
                     item["already_in_db"] = entry.value in existing
                     item["in_rpz"] = entry.value in blocked
@@ -393,6 +439,14 @@ def _split_extracted(groups) -> dict:
                     item["host"] = entry.host
                     item["already_in_db"] = entry.value in existing_urls
                     buckets["urls"].append(item)
+                elif entry.entry_type == "email":
+                    item["host"] = entry.host
+                    item["already_in_db"] = entry.value in existing_emails
+                    # Домен из адреса мог уже попасть в блокировку отдельно —
+                    # тогда предлагать его ещё раз не нужно.
+                    item["host_blocked"] = entry.host in blocked
+                    item["host_known"] = entry.host in existing
+                    buckets["emails"].append(item)
                 elif entry.entry_type in HASH_TYPES:
                     item["already_in_db"] = entry.value in existing_hashes
                     buckets["hashes"].append(item)
@@ -563,6 +617,7 @@ def _letter_for_number(number: str, letter_date, notes: str) -> Letter:
 def preview_save():
     selected = request.form.getlist("selected")
     selected_urls = request.form.getlist("selected_url")
+    selected_emails = request.form.getlist("selected_email")
     selected_hashes = request.form.getlist("selected_hash")
     notes = request.form.get("notes", "")
 
@@ -575,7 +630,7 @@ def preview_save():
               "danger")
         return redirect(url_for("fstec.upload"))
 
-    if not (selected or selected_urls or selected_hashes):
+    if not (selected or selected_urls or selected_emails or selected_hashes):
         flash("Не выбрано ни одной записи, но сами файлы сохранены.", "warning")
 
     blocked = _latest_blocked_domains()
@@ -622,7 +677,7 @@ def preview_save():
     db.session.flush()
 
     counts = {}
-    added = urls_added = hashes_added = 0
+    added = urls_added = emails_added = hashes_added = 0
 
     def _link(entry, index: int) -> None:
         """Привязать индикатор к письму, из которого он пришёл."""
@@ -672,6 +727,22 @@ def preview_save():
             urls_added += 1
         _link(entry, index)
 
+    for raw in selected_emails:
+        index, value = _split_choice(raw)
+        value = value.lower()
+        if not value:
+            continue
+        entry = EmailEntry.query.filter_by(value=value).first()
+        if entry is None:
+            entry = EmailEntry(
+                value=value,
+                host=value.rsplit("@", 1)[-1],
+                added_by=current_user.id,
+            )
+            db.session.add(entry)
+            emails_added += 1
+        _link(entry, index)
+
     for raw in selected_hashes:
         index, value = _split_choice(raw)
         value = value.lower()
@@ -703,7 +774,7 @@ def preview_save():
             else f"Сохранено писем: {len(letters)}")
     flash(
         f"{word}. Новых адресов — {added}, URL — {urls_added}, "
-        f"хешей — {hashes_added}.",
+        f"почтовых адресов — {emails_added}, хешей — {hashes_added}.",
         "success",
     )
     if len(letters) == 1:
@@ -743,6 +814,7 @@ def documents():
             "domains": letter.block_entries.filter_by(entry_type="domain").count(),
             "ips": letter.block_entries.filter_by(entry_type="ip").count(),
             "urls": letter.url_entries.count(),
+            "emails": letter.email_entries.count(),
             "hashes": letter.ioc_hashes.count(),
             "files": len(letter.files),
         }
@@ -766,6 +838,7 @@ def letter_view(letter_id: int):
         ips=letter.block_entries.filter_by(entry_type="ip")
                   .order_by(BlockEntry.value).all(),
         urls=letter.url_entries.order_by(UrlEntry.value).all(),
+        emails=letter.email_entries.order_by(EmailEntry.value).all(),
         hashes=letter.ioc_hashes.order_by(IocHash.value).all(),
         add_form=AddFilesForm(),
     )
@@ -954,6 +1027,7 @@ def document_delete(letter_id: int):
     # нет: они могли прийти и из других писем, и быть уже выгружены в зону.
     letter.block_entries = []
     letter.url_entries = []
+    letter.email_entries = []
     letter.ioc_hashes = []
     db.session.delete(letter)
     db.session.commit()
@@ -980,6 +1054,7 @@ def object_view(entry_id: int):
         return redirect(url_for("fstec.object_view", entry_id=entry.id))
 
     blocked = _latest_blocked_domains()
+    related_emails = EmailEntry.query.filter_by(host=entry.value).all()
     related_urls = (
         UrlEntry.query.filter_by(host=entry.value).all()
         if entry.entry_type == "domain" else []
@@ -994,6 +1069,7 @@ def object_view(entry_id: int):
         in_rpz=entry.value in blocked,
         vt=entry.vt,
         related_urls=related_urls,
+        related_emails=related_emails,
         pushes=pushes,
         protected=entry.value in get_protected_domains(),
         vt_configured=bool(get_vt_key()),
@@ -1320,7 +1396,8 @@ def search():
     «проверьте вот это», и обходить четыре раздела по очереди неудобно.
     """
     q = request.args.get("q", "").strip().lower()
-    result = {"entries": [], "urls": [], "hashes": [], "zone": []}
+    result = {"entries": [], "urls": [], "emails": [], "hashes": [],
+              "zone": []}
 
     if q:
         like = f"%{q}%"
@@ -1330,6 +1407,10 @@ def search():
                           .filter(db.or_(UrlEntry.value.like(like),
                                          UrlEntry.host.like(like)))
                           .order_by(UrlEntry.value).limit(100).all())
+        result["emails"] = (EmailEntry.query
+                            .filter(db.or_(EmailEntry.value.like(like),
+                                           EmailEntry.host.like(like)))
+                            .order_by(EmailEntry.value).limit(100).all())
         result["hashes"] = (IocHash.query.filter(IocHash.value.like(like))
                             .order_by(IocHash.value).limit(100).all())
         # Зона могла быть наполнена и не через портал — ищем и в ней.
@@ -1373,6 +1454,102 @@ def urls_csv():
             for it in items
         ],
     )
+
+
+# --- Адреса электронной почты ----------------------------------------------
+
+@fstec_bp.route("/emails")
+@login_required
+def emails():
+    """Адреса отправителей из писем.
+
+    Отдельный раздел, а не строки среди доменов: домен из адреса в блокировку
+    сам не уходит. Здесь он виден рядом с адресом, и отправить его в RPZ можно
+    одной кнопкой — когда это подделка вроде roskomnadsor.ru, а не mail.ru.
+    """
+    q = request.args.get("q", "").strip().lower()
+    query = EmailEntry.query
+    if q:
+        query = query.filter(db.or_(EmailEntry.value.like(f"%{q}%"),
+                                    EmailEntry.host.like(f"%{q}%")))
+    page = request.args.get("page", 1, type=int)
+    pagination = query.order_by(EmailEntry.created_at.desc()).paginate(
+        page=page, per_page=PER_PAGE, error_out=False
+    )
+    # Какие домены уже заведены — чтобы не предлагать блокировать повторно.
+    known = {b.value for b in BlockEntry.query.filter_by(entry_type="domain")}
+    return render_template(
+        "fstec/emails.html", pagination=pagination, items=pagination.items,
+        q=q, known_hosts=known,
+    )
+
+
+@fstec_bp.route("/emails.csv")
+@login_required
+def emails_csv():
+    items = EmailEntry.query.order_by(EmailEntry.created_at.desc()).all()
+    return _csv_response(
+        "fstec-emails",
+        ["Адрес", "Домен", "Письма", "Добавлен"],
+        [
+            [it.value, it.host, it.letter_numbers, _fmt(it.created_at)]
+            for it in items
+        ],
+    )
+
+
+@fstec_bp.route("/emails/<int:email_id>/block-host", methods=["POST"])
+@operator_required
+def email_block_host(email_id: int):
+    """Отправить домен из адреса в кандидаты на блокировку.
+
+    Только по решению аналитика: автоматически этого не делается, иначе один
+    фишинг с mail.ru закрыл бы отделу почту.
+    """
+    back = request.form.get("back") or url_for("fstec.emails")
+    entry = db.session.get(EmailEntry, email_id)
+    if entry is None or not entry.host:
+        flash("Адрес не найден или домен из него не разобран.", "danger")
+        return redirect(url_for("fstec.emails"))
+
+    existing = BlockEntry.query.filter_by(value=entry.host).first()
+    if existing is not None:
+        flash(f"Домен {entry.host} уже в списке (статус: {existing.status}).",
+              "info")
+        return redirect(back)
+
+    block = BlockEntry(
+        value=entry.host,
+        entry_type="domain",
+        status=STATUS_NEW,
+        source="email",
+        added_by=current_user.id,
+        notes=f"Домен адреса {entry.value}",
+    )
+    db.session.add(block)
+    # Домен пришёл из тех же писем, что и адрес: связь надо сохранить, иначе
+    # в карточке домена не будет видно, откуда он взялся.
+    for letter in entry.letters:
+        block.letters.append(letter)
+    db.session.commit()
+    flash(f"Домен {entry.host} добавлен в кандидаты на блокировку.", "success")
+    return redirect(back)
+
+
+@fstec_bp.route("/emails/<int:email_id>/delete", methods=["POST"])
+@operator_required
+def email_delete(email_id: int):
+    back = request.form.get("back") or url_for("fstec.emails")
+    entry = db.session.get(EmailEntry, email_id)
+    if entry is None:
+        flash("Адрес не найден.", "danger")
+        return redirect(url_for("fstec.emails"))
+    value = entry.value
+    entry.letters = []
+    db.session.delete(entry)
+    db.session.commit()
+    flash(f"Адрес {value} удалён.", "success")
+    return redirect(back)
 
 
 # --- Хеши (IoC) ------------------------------------------------------------
